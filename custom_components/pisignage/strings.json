@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to piSignage",
+        "description": "Enter the details you use to sign in at pisignage.com.",
+        "data": {
+          "account": "Account",
+          "username": "Username or email",
+          "password": "Password"
+        },
+        "data_description": {
+          "account": "Your piSignage subdomain, for example `myco` for myco.pisignage.com. A full URL also works.",
+          "username": "The username or email address you sign in with.",
+          "password": "The password for that account."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate piSignage",
+        "description": "piSignage rejected the stored credentials for {account}. Enter the password again.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach piSignage. Check the account name and your internet connection.",
+      "invalid_auth": "piSignage rejected those credentials.",
+      "invalid_account": "That account name is not valid.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This piSignage account is already set up.",
+      "reauth_successful": "piSignage was re-authenticated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "piSignage options",
+        "data": {
+          "scan_interval": "Update interval"
+        },
+        "data_description": {
+          "scan_interval": "How often to poll piSignage, in seconds. The hosted service is shared, so keep this at 30 seconds or higher."
+        }
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "playlist": {
+        "name": "Playlist"
+      }
+    },
+    "sensor": {
+      "current_playlist": {
+        "name": "Current playlist"
+      },
+      "last_seen": {
+        "name": "Last seen"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_playlist": {
+      "message": "There is no playlist named '{playlist}' on this piSignage account."
+    },
+    "set_playlist_failed": {
+      "message": "Could not switch to playlist '{playlist}': {error}"
+    }
+  }
+}

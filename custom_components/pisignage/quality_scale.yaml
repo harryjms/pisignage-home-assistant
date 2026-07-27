@@ -1,0 +1,76 @@
+rules:
+  # --- bronze ---
+  action-setup: done
+  appropriate-polling:
+    status: done
+    comment: |
+      60s default, 30s floor. The hosted piSignage service is shared
+      infrastructure and its own docs put the polling floor at 30-60s.
+  brands: todo
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: exempt
+    comment: |
+      The API client is vendored in api.py rather than published as a separate
+      PyPI package. Core Home Assistant requires device I/O to live in an
+      external library; that rule does not bind a custom component, and
+      vendoring keeps this installable straight from HACS with no separate
+      release pipeline. Everything HTTP lives in the single api.py module, so
+      the boundary the rule protects is still intact.
+  docs-actions: done
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # --- silver ---
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: todo
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage: todo
+
+  # --- gold ---
+  devices: done
+  diagnostics: todo
+  discovery:
+    status: exempt
+    comment: The hosted service is cloud-only; there is nothing on the LAN to discover.
+  discovery-update-info:
+    status: exempt
+    comment: See discovery.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices: done
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: todo
+  repair-issues: todo
+  stale-devices: todo
+
+  # --- platinum ---
+  async-dependency: done
+  inject-websession: done
+  strict-typing: todo

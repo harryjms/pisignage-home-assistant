@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Hand-made upload bundles — HACS installs from the repo, not from a zip.
+*.zip
+.DS_Store

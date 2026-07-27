@@ -1,0 +1,25 @@
+{
+  "entity": {
+    "select": {
+      "playlist": {
+        "default": "mdi:playlist-play"
+      }
+    },
+    "sensor": {
+      "current_playlist": {
+        "default": "mdi:playlist-music"
+      },
+      "last_seen": {
+        "default": "mdi:clock-check-outline"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "default": "mdi:monitor-off",
+        "state": {
+          "on": "mdi:monitor"
+        }
+      }
+    }
+  }
+}
