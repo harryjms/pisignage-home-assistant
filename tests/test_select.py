@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 from homeassistant.components.select import (
     ATTR_OPTION,
     ATTR_OPTIONS,
@@ -17,7 +15,7 @@ import pytest
 
 from custom_components.pisignage.api import PiSignageError
 
-from .conftest import make_group, make_player
+from .conftest import iso_now, make_group, make_player
 
 SELECT_ENTITY = "select.lobby_screen_playlist"
 SENSOR_ENTITY = "sensor.lobby_screen_current_playlist"
@@ -124,17 +122,42 @@ async def test_online_binary_sensor(hass: HomeAssistant, init_integration) -> No
     assert hass.states.get(ONLINE_ENTITY).state == STATE_ON
 
 
-async def test_stale_player_reads_offline(
+async def test_disconnected_player_reads_offline(
     hass: HomeAssistant, mock_config_entry, mock_client
 ) -> None:
-    mock_client.async_get_players.return_value = [
-        make_player(lastReported=time.time() - 3600)
-    ]
+    mock_client.async_get_players.return_value = [make_player(isConnected=False)]
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
     assert hass.states.get(ONLINE_ENTITY).state == STATE_OFF
+
+
+async def test_stale_player_reads_offline_without_isconnected(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    """Older players omit isConnected, so check-in age is the fallback."""
+    player = make_player(lastReported=iso_now(-3600))
+    del player["isConnected"]
+    mock_client.async_get_players.return_value = [player]
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(ONLINE_ENTITY).state == STATE_OFF
+
+
+async def test_recent_player_reads_online_without_isconnected(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    player = make_player(lastReported=iso_now(-30))
+    del player["isConnected"]
+    mock_client.async_get_players.return_value = [player]
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(ONLINE_ENTITY).state == STATE_ON
 
 
 async def test_player_without_group_cannot_deploy(

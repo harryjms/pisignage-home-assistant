@@ -43,9 +43,11 @@ async def test_user_flow_creates_entry(hass: HomeAssistant, mock_client) -> None
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (PiSignageAuthError("nope"), "invalid_auth"),
+        (PiSignageAuthError("Incorrect password."), "invalid_auth"),
         (PiSignageConnectionError("down"), "cannot_connect"),
-        (PiSignageError("weird"), "cannot_connect"),
+        # An application-level refusal is not a connectivity problem; calling
+        # it one sent people to check their network for an API error.
+        (PiSignageError("weird"), "api_error"),
         (RuntimeError("boom"), "unknown"),
     ],
 )
@@ -63,6 +65,9 @@ async def test_user_flow_errors_then_recovers(
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": expected}
+    # The server's own wording must reach the form, not be replaced by a
+    # generic message that sends people to debug the wrong thing.
+    assert result["description_placeholders"]["detail"] == str(error)
 
     # The flow must still be usable once the problem clears.
     mock_client.async_validate_connection.side_effect = None

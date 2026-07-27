@@ -43,14 +43,20 @@ class PiSignageOnlineSensor(PiSignageEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """True when the last check-in is recent enough.
+        """Whether the screen is currently reachable.
 
-        piSignage has no explicit online flag — liveness is inferred from how
-        long ago the player last reported in.
+        Hosted accounts expose an explicit ``isConnected`` flag, which reflects
+        the player's live socket and is more accurate than guessing. Older
+        players and self-hosted servers may omit it, so the check-in age
+        remains as a fallback.
         """
         player = self.player
         if player is None:
             return None
+
+        connected = player.get("isConnected")
+        if isinstance(connected, bool):
+            return connected
 
         last_reported = normalise_epoch(player.get("lastReported"))
         if last_reported is None:

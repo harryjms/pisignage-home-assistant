@@ -24,10 +24,11 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach piSignage. Check the account name and your internet connection.",
-      "invalid_auth": "piSignage rejected those credentials.",
+      "cannot_connect": "Could not reach piSignage. Check the account name and your internet connection. ({detail})",
+      "invalid_auth": "piSignage rejected those credentials: {detail}",
       "invalid_account": "That account name is not valid.",
-      "unknown": "Unexpected error. Check the Home Assistant log for details."
+      "api_error": "piSignage refused the request: {detail}",
+      "unknown": "Unexpected error: {detail}. Check the Home Assistant log for details."
     },
     "abort": {
       "already_configured": "This piSignage account is already set up.",

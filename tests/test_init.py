@@ -106,6 +106,6 @@ async def test_device_is_registered(hass: HomeAssistant, init_integration) -> No
 
     assert device is not None
     assert device.name == "Lobby Screen"
-    assert device.sw_version == "3.2.0"
-    assert device.serial_number == "0000000012345678"
+    assert device.sw_version == "5.4.3"
+    assert device.serial_number == "400000000108d2e2"
     assert device.configuration_url == "https://myco.pisignage.com"

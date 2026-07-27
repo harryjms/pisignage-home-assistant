@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -21,18 +21,32 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     return
 
 
+def iso_now(offset_seconds: float = 0) -> str:
+    """A timestamp in the ISO 8601 form the live API actually returns."""
+    stamp = datetime.now(tz=UTC) + timedelta(seconds=offset_seconds)
+    return stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def make_player(**overrides: Any) -> dict[str, Any]:
-    """A player as the API returns it."""
+    """A player, shaped like a real hosted-account response.
+
+    Field names and types here were captured from a live account rather than
+    from the API docs, which disagree with it in several places.
+    """
     player = {
         "_id": "player1",
         "name": "Lobby Screen",
         "currentPlaylist": "Promos",
         "playlistOn": True,
-        "group": {"_id": "group1", "name": "Stores"},
-        "lastReported": time.time(),
-        "version": "3.2.0",
-        "platform_version": "bookworm",
-        "cpuSerialNumber": "0000000012345678",
+        "isConnected": True,
+        "group": {"_id": "group1", "name": "Stores", "color": "gray"},
+        "lastReported": iso_now(),
+        "lastUpload": 1785175541659,  # epoch ms, on the same object
+        "version": "5.4.3",
+        "platform_version": "543_13_script_2026-03-13",
+        "cpuSerialNumber": "400000000108d2e2",
+        "licensed": True,
+        "syncInProgress": False,
     }
     player.update(overrides)
     return player

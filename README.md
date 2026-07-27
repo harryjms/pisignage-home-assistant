@@ -18,7 +18,7 @@ One device is created per player. Each carries:
 |---|---|---|
 | `select.<player>_playlist` | Select | The playlist this screen is playing. Read it, or set it to switch. |
 | `sensor.<player>_current_playlist` | Sensor | The playing playlist as a plain string, handy in templates. |
-| `binary_sensor.<player>_online` | Binary sensor | `on` when the player checked in within the last 5 minutes. |
+| `binary_sensor.<player>_online` | Binary sensor | `on` when piSignage reports the player connected. Same state the piSignage dashboard shows. |
 | `sensor.<player>_last_seen` | Sensor | Timestamp of the last check-in. Disabled by default. |
 
 A screen named *Lobby Screen* gives you `select.lobby_screen_playlist`, and so on.
@@ -155,10 +155,17 @@ automation:
 ## Troubleshooting
 
 **A screen shows as offline but looks fine.**
-piSignage has no explicit online flag — liveness is inferred from how long ago the
-player last checked in. Anything older than 5 minutes reads as offline. A player on a
-flaky network can flap; the `sensor.<player>_last_seen` entity (disabled by default)
-shows the exact timestamp.
+The state comes from piSignage's own `isConnected` flag — the same one its dashboard
+shows — which tracks the player's live connection to the server. A screen can be
+powered on and playing perfectly while that connection is briefly dropped, so short
+flaps are normal. Enable `sensor.<player>_last_seen` (disabled by default) to see when
+the player actually last checked in; if that timestamp is recent, the screen is fine.
+
+If your player is old enough not to report `isConnected`, the integration falls back to
+treating a check-in older than 5 minutes as offline.
+
+When automating on this, put a `for:` duration on the trigger so a momentary drop does
+not page you — the example above uses 10 minutes.
 
 **I picked a playlist and the screen did not change.**
 Check the Home Assistant log. If the playlist had to be deployed, the player may still

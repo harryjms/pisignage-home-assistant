@@ -13,6 +13,7 @@ import pytest
 
 from custom_components.pisignage import api as api_module
 from custom_components.pisignage.api import (
+    PER_PAGE,
     PiSignageAuthError,
     PiSignageClient,
     PiSignageError,
@@ -89,8 +90,13 @@ def test_build_base_url_rejects_empty() -> None:
         (1481008511, 1481008511),
         (1481008511817, 1481008511.817),  # milliseconds get scaled down
         ("1481008511", 1481008511),
+        # Live hosted accounts return lastReported as ISO 8601, which used to
+        # parse as None and made every screen read offline.
+        ("2026-07-27T19:47:14.376Z", 1785181634.376),
+        ("2026-07-27T19:47:14Z", 1785181634.0),
         (None, None),
         ("nonsense", None),
+        ("", None),
         (0, None),
     ],
 )
@@ -112,6 +118,63 @@ async def test_login_caches_token() -> None:
     _, _, players_kwargs = session.calls[1]
     assert players_kwargs["headers"] == {"x-access-token": "jwt-token"}
     assert "token" not in players_kwargs["params"]
+
+
+async def test_session_response_has_no_envelope() -> None:
+    """POST /session answers with a bare object and no `success` field.
+
+    Treating the missing flag as failure made every single login fail, which
+    surfaced in the UI as "could not reach piSignage".
+    """
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "token": "jwt-token",
+                    "userInfo": {"username": "gaydio", "role": "User"},
+                },
+            ),
+            ok({"objects": [], "pages": 1}),
+        ]
+    )
+    client = make_client(session)
+
+    await client.async_get_players()
+
+    assert client.token == "jwt-token"
+
+
+async def test_bad_password_is_an_auth_error_not_a_connection_error() -> None:
+    """A rejected password returns 401 with `message`, not `stat_message`."""
+    session = FakeSession(
+        [FakeResponse(401, {"message": "Incorrect password.", "error": {}})]
+    )
+    client = make_client(session)
+
+    with pytest.raises(PiSignageAuthError, match="Incorrect password"):
+        await client.async_login()
+
+
+async def test_expired_token_message_is_preserved() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                401,
+                {
+                    "message": "Your session has expired or you are not "
+                    "signed in. Please log in again.",
+                    "error": {},
+                },
+            ),
+            FakeResponse(200, {"token": "fresh-token"}),
+            ok([{"name": "Promos"}]),
+        ]
+    )
+    client = make_client(session, token="stale-token")
+
+    assert await client.async_get_playlist_names() == ["Promos"]
+    assert client.token == "fresh-token"
 
 
 async def test_success_false_raises_even_on_http_200() -> None:
@@ -156,19 +219,36 @@ async def test_401_twice_gives_up_as_auth_error() -> None:
         await client.async_get_playlist_names()
 
 
-async def test_pagination_walks_then_stops() -> None:
+async def test_pagination_starts_at_page_zero() -> None:
+    """Paging is zero-indexed; asking for page 1 first returns nothing at all."""
+    session = FakeSession([login_ok(), ok({"objects": [{"_id": "a"}], "pages": 1})])
+    client = make_client(session)
+
+    assert await client.async_get_players() == [{"_id": "a"}]
+
+    _, _, kwargs = session.calls[1]
+    assert kwargs["params"]["page"] == "0"
+
+
+async def test_pagination_walks_until_a_short_page() -> None:
+    """`pages` and `count` describe the current page, so only length can end it."""
+    full_page = [{"_id": f"p{n}"} for n in range(PER_PAGE)]
     session = FakeSession(
         [
             login_ok(),
-            ok({"objects": [{"_id": "a"}], "pages": 2}),
-            ok({"objects": [{"_id": "b"}], "pages": 2}),
+            # A full page reports pages=1 even though more remain.
+            ok({"objects": full_page, "pages": 1, "count": PER_PAGE}),
+            ok({"objects": [{"_id": "last"}], "pages": 1, "count": 1}),
         ]
     )
     client = make_client(session)
 
     players = await client.async_get_players()
 
-    assert [player["_id"] for player in players] == ["a", "b"]
+    assert len(players) == PER_PAGE + 1
+    assert players[-1]["_id"] == "last"
+    pages = [kwargs["params"]["page"] for _, _, kwargs in session.calls[1:]]
+    assert pages == ["0", "1"]
 
 
 async def test_pagination_stops_on_empty_page() -> None:

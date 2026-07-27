@@ -4,17 +4,33 @@ Only the hosted surface (``https://<account>.pisignage.com/api``) is supported.
 Authentication is a JWT obtained from ``POST /session`` and replayed on every
 later call in the ``x-access-token`` header.
 
-The API answers with a fixed envelope::
+Most endpoints answer with an envelope::
 
     {"success": true, "stat_message": "...", "data": {...}}
 
-``success`` can be ``false`` on an HTTP 200, so every response is judged on the
-body rather than the status code.
+``success`` can be ``false`` on an HTTP 200, so responses are judged on the body
+rather than the status code. But the envelope is not universal — ``POST
+/session`` returns a bare ``{token, userInfo}`` with no ``success`` field, and
+failures return ``{"message": ..., "error": {}}``. All three shapes are handled.
+
+Other live-API quirks worth knowing, each verified against a real account:
+
+* Collection paging is **zero-indexed**; ``?page=1`` on a one-page collection
+  returns nothing.
+* ``pages`` and ``count`` describe the page just returned, not the collection,
+  so a short batch is the only reliable end signal.
+* ``data`` is sometimes a bare list (``/playlists``, ``/groups``) and sometimes
+  an object with ``objects`` (``/players``).
+* Timestamps are not consistent even within one object: ``lastReported`` is an
+  ISO 8601 string while ``lastUpload`` is epoch milliseconds.
+* The JWT is short-lived (about four hours), so re-auth on 401 is a normal
+  part of operation rather than an error path.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from http import HTTPStatus
 import logging
 from typing import Any
@@ -75,10 +91,26 @@ def build_base_url(account: str) -> str:
 def normalise_epoch(value: Any) -> float | None:
     """Return *value* as epoch seconds.
 
-    piSignage is inconsistent about units — ``lastReported`` is documented in
-    seconds while ``lastDeployed`` is in milliseconds. Anything implausibly far
-    in the future is assumed to be milliseconds.
+    piSignage is wildly inconsistent about time. Live hosted accounts return
+    ``lastReported`` as an ISO 8601 string, while ``lastUpload`` on the same
+    object is epoch milliseconds and the API docs describe seconds. All three
+    are accepted here.
     """
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            # fromisoformat handles the trailing Z from Python 3.11 onwards.
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            # Fall through: it might still be a number wearing a string.
+            pass
+        else:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.timestamp()
+
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -179,24 +211,33 @@ class PiSignageClient:
         except ValueError as err:
             raise PiSignageError(f"{path} returned a non-JSON response") from err
 
-        if status in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-            raise PiSignageAuthError("piSignage rejected the credentials or token")
-
         if not isinstance(payload, dict):
             raise PiSignageError(f"{path} returned an unexpected payload")
 
-        message = payload.get("stat_message") or f"{path} failed"
-        if not payload.get("success", False):
-            # The server reports application failures with HTTP 200, so the
-            # body is the only reliable signal.
-            if "token" in message.lower() or "auth" in message.lower():
-                raise PiSignageAuthError(message)
-            raise PiSignageError(message)
+        # Failures carry their reason in `message`; successful envelope
+        # responses use `stat_message`.
+        message = (
+            payload.get("message")
+            or payload.get("stat_message")
+            or f"{path} failed with HTTP {status}"
+        )
 
+        if status in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
+            raise PiSignageAuthError(message)
         if status >= HTTPStatus.BAD_REQUEST:
             raise PiSignageError(message)
 
-        return payload.get("data")
+        if "success" in payload:
+            if not payload["success"]:
+                # Application failures come back with HTTP 200, so the body is
+                # the only reliable signal.
+                raise PiSignageError(message)
+            return payload.get("data")
+
+        # Not every endpoint uses the envelope — POST /session answers with a
+        # bare {token, userInfo} object and no success flag at all. Treating a
+        # missing flag as failure made every login fail.
+        return payload
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """Perform a request, re-authenticating once if the token expired."""
@@ -244,9 +285,18 @@ class PiSignageClient:
     async def _async_paginated(
         self, path: str, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
-        """Walk a paginated collection endpoint."""
+        """Walk a paginated collection endpoint.
+
+        Paging is **zero-indexed**: ``?page=1`` on a single-page collection
+        returns nothing at all. Asking for page 1 first is why this used to
+        report an empty fleet on accounts that clearly had players.
+
+        The ``pages`` and ``count`` fields describe the page just returned
+        rather than the collection, so they cannot be used to decide when to
+        stop. A short batch is the reliable end-of-collection signal.
+        """
         results: list[dict[str, Any]] = []
-        for page in range(1, MAX_PAGES + 1):
+        for page in range(MAX_PAGES):
             query = dict(params or {})
             query.update({"page": page, "per_page": PER_PAGE})
             data = await self._request("GET", path, params=query)
@@ -254,13 +304,7 @@ class PiSignageClient:
             batch = [item for item in extract_list(data) if isinstance(item, dict)]
             results.extend(batch)
 
-            total_pages = data.get("pages") if isinstance(data, dict) else None
-            if not batch or not total_pages:
-                break
-            try:
-                if page >= int(total_pages):
-                    break
-            except (TypeError, ValueError):
+            if len(batch) < PER_PAGE:
                 break
         return results
 

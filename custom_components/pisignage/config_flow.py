@@ -66,6 +66,12 @@ class PiSignageConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialise the flow."""
+        # Surfaced in the form so the server's own wording reaches the user
+        # instead of being replaced by a generic message.
+        self._error_detail: str = ""
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> PiSignageOptionsFlow:
@@ -100,6 +106,7 @@ class PiSignageConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(
                 STEP_USER_SCHEMA, user_input or {}
             ),
+            description_placeholders={"detail": self._error_detail},
             errors=errors,
         )
 
@@ -128,6 +135,7 @@ class PiSignageConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=STEP_REAUTH_SCHEMA,
             description_placeholders={
                 CONF_ACCOUNT: reauth_entry.data.get(CONF_ACCOUNT, ""),
+                "detail": self._error_detail,
             },
             errors=errors,
         )
@@ -142,15 +150,25 @@ class PiSignageConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         try:
             await client.async_validate_connection()
-        except PiSignageAuthError:
+        except PiSignageAuthError as err:
+            _LOGGER.debug("piSignage rejected the credentials: %s", err)
+            self._error_detail = str(err)
             return {"base": "invalid_auth"}
-        except PiSignageConnectionError:
+        except PiSignageConnectionError as err:
+            # Previously logged nothing at all, which left "check your internet"
+            # as the only clue for a problem that was often something else.
+            _LOGGER.debug("Could not reach piSignage at %s: %s", client.base_url, err)
+            self._error_detail = str(err)
             return {"base": "cannot_connect"}
         except PiSignageError as err:
-            _LOGGER.debug("piSignage rejected the setup request: %s", err)
-            return {"base": "cannot_connect"}
-        except Exception:
+            # An application-level refusal is not a connectivity problem, and
+            # flattening it into one hid the server's own explanation.
+            _LOGGER.debug("piSignage refused the setup request: %s", err)
+            self._error_detail = str(err)
+            return {"base": "api_error"}
+        except Exception as err:  # the flow must never leak a traceback to the UI
             _LOGGER.exception("Unexpected error validating piSignage credentials")
+            self._error_detail = str(err)
             return {"base": "unknown"}
         return {}
 
