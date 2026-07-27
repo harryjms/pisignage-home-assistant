@@ -364,76 +364,87 @@ class PiSignageClient:
             "POST", f"setplaylist/{quote(player_id)}/{quote(playlist, safe='')}"
         )
 
-    async def async_deploy_playlist_to_group(
-        self, group: dict[str, Any], playlist: str
+    async def async_set_group_playlists(
+        self, group_id: str, entries: list[dict[str, Any]], *, deploy: bool = True
     ) -> None:
-        """Attach *playlist* to *group* and push it to every member player.
+        """Replace a group's playlist list and push it to its players.
 
         ``POST /groups/{id}`` is a partial update at the top level, but the
-        ``playlists`` array is replaced wholesale — so the current array is read
-        from *group* and appended to rather than overwritten.
+        ``playlists`` array is replaced wholesale, so *entries* becomes the
+        group's complete list. Pass whole entry dicts to keep their per-group
+        schedule settings intact.
         """
-        group_id = group.get("_id")
-        if not group_id:
-            raise PiSignageError("Group has no id, cannot deploy")
-
-        playlists = [
-            entry for entry in (group.get("playlists") or []) if isinstance(entry, dict)
-        ]
-        if not any(entry.get("name") == playlist for entry in playlists):
-            playlists.append({"name": playlist, "settings": {}})
-
         await self._request(
             "POST",
             f"groups/{quote(str(group_id))}",
-            json={"playlists": playlists, "deploy": True},
+            json={"playlists": entries, "deploy": deploy},
         )
 
-    async def async_activate_playlist(
+    async def async_assign_playlist(
         self, player_id: str, group: dict[str, Any], playlist: str
-    ) -> bool:
-        """Make *player_id* play *playlist*, deploying it first if necessary.
+    ) -> list[str]:
+        """Make *playlist* the group's only playlist, persistently.
 
-        Returns ``True`` when a group-wide deploy was needed. A deploy makes
-        every player in the group re-sync, so callers should surface that.
+        piSignage has no per-screen playlist assignment: a group plays its
+        whole eligible set, and ``/setplaylist`` is only a one-shot that plays
+        something once before the rotation resumes. The only way to make a
+        screen keep showing one playlist is to make it the group's entire set,
+        which is what this does.
+
+        Returns the playlists that were removed from the group, so the caller
+        can tell the user what changed. An empty list means the playlist was
+        already the group's sole entry and nothing was altered.
         """
-        deployed = {
+        group_id = group.get("_id")
+        if not group_id:
+            raise PiSignageError("Group has no id, cannot assign a playlist")
+
+        deployed = [
             entry.get("name")
             for entry in (group.get("deployedPlaylists") or [])
             if isinstance(entry, dict)
-        }
+        ]
+        pending = [
+            entry for entry in (group.get("playlists") or []) if isinstance(entry, dict)
+        ]
 
-        if playlist in deployed:
-            await self.async_set_player_playlist(player_id, playlist)
-            return False
+        removed = [name for name in deployed if name and name != playlist]
+        already_sole = deployed == [playlist] and [
+            entry.get("name") for entry in pending
+        ] == [playlist]
 
-        await self.async_deploy_playlist_to_group(group, playlist)
+        if not already_sole:
+            # Reuse the group's own entry when it already knows this playlist,
+            # so its schedule and per-group settings survive the assignment.
+            existing = next(
+                (entry for entry in pending if entry.get("name") == playlist), None
+            )
+            entry = dict(existing) if existing else {"name": playlist, "settings": {}}
+            await self.async_set_group_playlists(str(group_id), [entry])
 
-        last_error: Exception | None = None
+        # The deploy above is what makes the change persist. Pinning only
+        # shortens the gap before the screen catches up, so a failure here is
+        # not worth failing the whole operation over.
         for attempt in range(PIN_ATTEMPTS):
-            await asyncio.sleep(PIN_RETRY_DELAY)
             try:
                 await self.async_set_player_playlist(player_id, playlist)
             except PiSignageAuthError:
                 raise
             except PiSignageError as err:
-                last_error = err
-                _LOGGER.debug(
-                    "Pinning %s to %s failed (attempt %s/%s): %s",
-                    player_id,
-                    playlist,
-                    attempt + 1,
-                    PIN_ATTEMPTS,
-                    err,
-                )
+                if attempt == PIN_ATTEMPTS - 1:
+                    _LOGGER.debug(
+                        "Assigned %s to group %s but could not start it "
+                        "immediately; it will begin after the player syncs: %s",
+                        playlist,
+                        group.get("name") or group_id,
+                        err,
+                    )
+                    break
+                await asyncio.sleep(PIN_RETRY_DELAY)
             else:
-                return True
+                break
 
-        raise PiSignageError(
-            f"'{playlist}' was deployed to the group, but the player has not "
-            f"finished syncing it yet so it could not be started immediately. "
-            f"It should begin playing once the sync completes. ({last_error})"
-        )
+        return removed
 
     # ------------------------------------------------------------------
     # setup helpers

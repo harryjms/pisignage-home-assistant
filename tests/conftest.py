@@ -98,7 +98,7 @@ def mock_client():
         client.async_get_playlist_names = AsyncMock(
             return_value=["NewYearSale", "Promos"]
         )
-        client.async_activate_playlist = AsyncMock(return_value=False)
+        client.async_assign_playlist = AsyncMock(return_value=[])
         client.async_get_group = AsyncMock(return_value=make_group())
         yield client
 

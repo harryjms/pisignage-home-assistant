@@ -68,29 +68,29 @@ In piSignage, playlists are not attached to individual screens. They are attache
 Asset ──▶ Playlist ──assigned to──▶ Group ──contains──▶ Player
 ```
 
-So there are two different ways to change what a screen plays, and the integration picks
-between them for you:
+A group plays its **whole eligible set** on rotation, and `POST /setplaylist` only plays
+something *once* before that rotation resumes. So there is no per-screen "play only
+this" concept in piSignage at all.
 
-**If the playlist is already deployed to that screen's group**, switching is instant and
-completely local to that one screen. Nothing else is affected.
-
-**If the playlist is not on that group yet**, it has to be deployed first. The
-integration adds it to the group and deploys.
+To make an assignment persistent — the screen shows this playlist and keeps showing it —
+the integration sets the group's playlist list to **exactly** the playlist you chose,
+then deploys.
 
 > [!WARNING]
-> Deploying makes **every player in that group** re-sync. Other screens in the same
-> group may change what they are showing. The integration logs a warning naming the
-> group whenever this happens, so check your Home Assistant log if a screen changed
-> unexpectedly.
+> Selecting a playlist **removes the group's other playlists**, including any schedules
+> configured on them in piSignage. If a group is set up to rotate between several
+> playlists, or to show one only at certain times, choosing a playlist here discards
+> that arrangement.
 >
-> If you want each screen to be independently controllable, give each player its own
-> group in piSignage, or deploy all the playlists you intend to use to the group ahead
-> of time — after that, every switch takes the instant path.
+> The integration logs a warning naming exactly what it removed, so check the Home
+> Assistant log if a group changes unexpectedly. Re-add them in piSignage to restore.
+>
+> **Give each screen its own group** if you want them independently controllable —
+> selecting a playlist affects every player in the group.
 
-After a deploy the player needs a moment to download the new content. The integration
-retries briefly, but if the sync is still running it reports that the playlist was
-deployed and will start playing once the sync finishes, rather than silently claiming
-success.
+The selector shows your choice immediately, while the player is still syncing. It falls
+back to the polled value once piSignage confirms the change, so if a deploy silently
+fails the entity will revert rather than lie to you.
 
 ## Examples
 
@@ -173,8 +173,13 @@ be downloading it — large videos take a while. The screen should switch once t
 completes, and the entity will catch up on the next poll.
 
 **Another screen changed when I only touched one.**
-The playlist you chose was not on that group yet, so deploying it re-synced the whole
-group. See [How switching playlists works](#how-switching-playlists-works).
+Both screens are in the same piSignage group, and assignment is per group. Put each
+screen in its own group. See [How switching playlists works](#how-switching-playlists-works).
+
+**A group lost playlists I had scheduled.**
+Selecting a playlist makes it that group's only playlist, which is what makes the
+assignment stick. The Home Assistant log records exactly what was removed — search it
+for `removing`. Re-add them in piSignage.
 
 **"Re-authentication required".**
 The stored password stopped working. Home Assistant will prompt you to re-enter it;

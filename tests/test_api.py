@@ -267,8 +267,8 @@ async def test_playlist_names_are_deduped_and_sorted() -> None:
     assert await client.async_get_playlist_names() == ["Apple", "zebra"]
 
 
-async def test_activate_already_deployed_playlist_does_not_deploy() -> None:
-    """The fast path must not touch the group — a deploy re-syncs every player."""
+async def test_assign_when_already_the_sole_playlist_changes_nothing() -> None:
+    """No group write when the assignment already holds — just re-pin."""
     session = FakeSession([login_ok(), ok()])
     client = make_client(session)
     group = {
@@ -278,15 +278,18 @@ async def test_activate_already_deployed_playlist_does_not_deploy() -> None:
         "deployedPlaylists": [{"name": "Promos"}],
     }
 
-    deployed = await client.async_activate_playlist("player1", group, "Promos")
+    removed = await client.async_assign_playlist("player1", group, "Promos")
 
-    assert deployed is False
+    assert removed == []
     assert session.paths == ["session", "setplaylist/player1/Promos"]
 
 
-async def test_activate_undeployed_playlist_deploys_then_pins(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_assign_replaces_the_group_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assignment must replace, not append.
+
+    Appending left the group playing every playlist ever selected on rotation,
+    so a change never stuck. The group must end up with exactly one entry.
+    """
     monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
     session = FakeSession([login_ok(), ok(), ok()])
     client = make_client(session)
@@ -297,26 +300,49 @@ async def test_activate_undeployed_playlist_deploys_then_pins(
         "deployedPlaylists": [{"name": "Promos", "settings": {}}],
     }
 
-    deployed = await client.async_activate_playlist("player1", group, "NewYearSale")
+    removed = await client.async_assign_playlist("player1", group, "NewYearSale")
 
-    assert deployed is True
+    assert removed == ["Promos"]
     assert session.paths == [
         "session",
         "groups/group1",
         "setplaylist/player1/NewYearSale",
     ]
 
-    # The existing playlist must survive — the API replaces the array wholesale.
     _, _, deploy_kwargs = session.calls[1]
     body = deploy_kwargs["json"]
     assert body["deploy"] is True
-    assert [entry["name"] for entry in body["playlists"]] == ["Promos", "NewYearSale"]
+    assert [entry["name"] for entry in body["playlists"]] == ["NewYearSale"]
 
 
-async def test_activate_reports_when_pin_never_succeeds(
+async def test_assign_keeps_existing_schedule_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A deploy that lands but never pins must not be reported as success."""
+    """A playlist the group already knows keeps its per-group schedule."""
+    monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
+    session = FakeSession([login_ok(), ok(), ok()])
+    client = make_client(session)
+    scheduled = {
+        "name": "Gaydio Gold",
+        "skipForSchedule": False,
+        "settings": {"timeEnable": True, "starttime": "19:55", "endtime": "00:00"},
+    }
+    group = {
+        "_id": "group1",
+        "name": "Studio 1",
+        "playlists": [{"name": "Logo"}, scheduled],
+        "deployedPlaylists": [{"name": "Logo"}, scheduled],
+    }
+
+    removed = await client.async_assign_playlist("player1", group, "Gaydio Gold")
+
+    assert removed == ["Logo"]
+    _, _, deploy_kwargs = session.calls[1]
+    assert deploy_kwargs["json"]["playlists"] == [scheduled]
+
+
+async def test_assign_survives_a_failed_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deploy is what persists; a slow player must not fail the call."""
     monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
 
     def failure() -> FakeResponse:
@@ -330,11 +356,13 @@ async def test_activate_reports_when_pin_never_succeeds(
         "_id": "group1",
         "name": "Stores",
         "playlists": [],
-        "deployedPlaylists": [],
+        "deployedPlaylists": [{"name": "Old"}],
     }
 
-    with pytest.raises(PiSignageError, match="has not finished syncing"):
-        await client.async_activate_playlist("player1", group, "NewYearSale")
+    removed = await client.async_assign_playlist("player1", group, "NewYearSale")
+
+    assert removed == ["Old"]
+    assert session.paths[1] == "groups/group1"
 
 
 async def test_playlist_name_with_spaces_is_encoded() -> None:
@@ -342,17 +370,18 @@ async def test_playlist_name_with_spaces_is_encoded() -> None:
     client = make_client(session)
     group = {
         "_id": "group1",
+        "playlists": [{"name": "Summer Sale"}],
         "deployedPlaylists": [{"name": "Summer Sale"}],
     }
 
-    await client.async_activate_playlist("player1", group, "Summer Sale")
+    await client.async_assign_playlist("player1", group, "Summer Sale")
 
     assert session.paths[-1] == "setplaylist/player1/Summer%20Sale"
 
 
-async def test_deploy_without_group_id_raises() -> None:
+async def test_assign_without_group_id_raises() -> None:
     session = FakeSession([login_ok()])
     client = make_client(session)
 
     with pytest.raises(PiSignageError, match="no id"):
-        await client.async_deploy_playlist_to_group({}, "Promos")
+        await client.async_assign_playlist("player1", {}, "Promos")

@@ -42,6 +42,10 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
     def __init__(self, coordinator: PiSignageCoordinator, player_id: str) -> None:
         """Initialise the selector."""
         super().__init__(coordinator, player_id, "playlist")
+        # Holds the just-selected value until a poll confirms it. A deploy can
+        # take a while to reach the screen, and without this the entity snaps
+        # back to the old playlist and looks like the change failed.
+        self._optimistic_option: str | None = None
 
     @property
     def options(self) -> list[str]:
@@ -52,14 +56,9 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
         about an out-of-range state.
         """
         options = set(self.coordinator.data.playlists)
-        if (current := self._current_playlist()) is not None:
+        if (current := self.current_option) is not None:
             options.add(current)
         return sorted(options, key=str.casefold)
-
-    @property
-    def current_option(self) -> str | None:
-        """The playlist currently playing on this screen."""
-        return self._current_playlist()
 
     def _current_playlist(self) -> str | None:
         player = self.player
@@ -69,14 +68,12 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
         return str(current) if current else None
 
     async def async_select_option(self, option: str) -> None:
-        """Make this screen play *option*.
+        """Assign *option* to this screen persistently.
 
-        Fast path: the playlist is already deployed to the screen's group, so a
-        single ``setplaylist`` call switches it with no other side effects.
-
-        Slow path: the playlist is not on the group yet, so it is attached and
-        deployed first. That makes **every** player in the group re-sync, which
-        is why it is logged loudly.
+        piSignage assigns playlists to groups, not to individual screens, and
+        a group plays its whole eligible set on rotation. So making a screen
+        keep showing one playlist means making it that group's only playlist —
+        which also removes the group's other playlists.
         """
         if option not in self.coordinator.data.playlists:
             raise ServiceValidationError(
@@ -85,30 +82,48 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
                 translation_placeholders={"playlist": option},
             )
 
-        player_name = (self.player or {}).get("name", self._player_id)
+        # Show the new value straight away instead of waiting for the next
+        # poll, otherwise a successful change looks like it did nothing.
+        self._optimistic_option = option
+        self.async_write_ha_state()
 
         try:
             group = await self.coordinator.async_get_player_group(self._player_id)
-            deployed = await self.coordinator.client.async_activate_playlist(
+            removed = await self.coordinator.client.async_assign_playlist(
                 self._player_id, group, option
             )
         except PiSignageError as err:
+            self._optimistic_option = None  # fall back to the polled value
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="set_playlist_failed",
                 translation_placeholders={"playlist": option, "error": str(err)},
             ) from err
         else:
-            if deployed:
+            if removed:
                 _LOGGER.warning(
-                    "Deployed playlist '%s' to group '%s' so that '%s' could play it. "
-                    "Every player in that group has re-synced and may have changed "
-                    "what it is showing",
+                    "Assigned '%s' to group '%s', removing %s from it. Every "
+                    "player in that group now shows '%s'. Re-add the others in "
+                    "piSignage if they were scheduled deliberately",
                     option,
                     group.get("name") or group.get("_id"),
-                    player_name,
+                    ", ".join(repr(name) for name in removed),
+                    option,
                 )
         finally:
-            # Re-read rather than assuming the write landed; a deploy can take a
-            # while to reach the player.
             await self.coordinator.async_request_refresh()
+
+    @property
+    def current_option(self) -> str | None:
+        """The playlist this screen is playing, or is about to.
+
+        The optimistic value stands only until a poll reports the same thing,
+        at which point the real reading takes over again.
+        """
+        polled = self._current_playlist()
+        if self._optimistic_option is not None:
+            if polled == self._optimistic_option:
+                self._optimistic_option = None
+            else:
+                return self._optimistic_option
+        return polled
