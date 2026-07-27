@@ -60,6 +60,11 @@ def login_ok() -> FakeResponse:
     return ok({"token": "jwt-token"})
 
 
+def playlist_ok(assets: list[str] | None = None) -> FakeResponse:
+    """A GET /playlists/{name} response carrying the playlist's asset rows."""
+    return ok({"name": "pl", "assets": [{"filename": a} for a in (assets or [])]})
+
+
 def make_client(session: FakeSession, token: str | None = None) -> PiSignageClient:
     return PiSignageClient("myco", "admin", "secret", session, token=token)  # type: ignore[arg-type]
 
@@ -272,7 +277,7 @@ async def test_assign_deploys_even_when_already_assigned(
 ) -> None:
     """Re-selecting must still deploy, so it can force a drifted screen back."""
     monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(["logo.png"]), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -287,12 +292,16 @@ async def test_assign_deploys_even_when_already_assigned(
     assert removed == []
     assert session.paths == [
         "session",
+        "playlists/Promos",
         "groups/group1",
         "setplaylist/player1/Promos",
     ]
-    _, _, kwargs = session.calls[1]
+    _, _, kwargs = session.calls[2]
     assert kwargs["json"]["deploy"] is True
     assert [e["name"] for e in kwargs["json"]["playlists"]] == ["Promos"]
+    # The group asset list is rebuilt from the playlist, or the screen never
+    # actually switches even though the deploy succeeds.
+    assert kwargs["json"]["assets"] == ["logo.png"]
 
 
 async def test_assign_replaces_the_group_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,7 +311,7 @@ async def test_assign_replaces_the_group_set(monkeypatch: pytest.MonkeyPatch) ->
     so a change never stuck. The group must end up with exactly one entry.
     """
     monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(["sale.mp4"]), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -316,14 +325,16 @@ async def test_assign_replaces_the_group_set(monkeypatch: pytest.MonkeyPatch) ->
     assert removed == ["Promos"]
     assert session.paths == [
         "session",
+        "playlists/NewYearSale",
         "groups/group1",
         "setplaylist/player1/NewYearSale",
     ]
 
-    _, _, deploy_kwargs = session.calls[1]
+    _, _, deploy_kwargs = session.calls[2]
     body = deploy_kwargs["json"]
     assert body["deploy"] is True
     assert [entry["name"] for entry in body["playlists"]] == ["NewYearSale"]
+    assert body["assets"] == ["sale.mp4"]
 
 
 async def test_assign_keeps_existing_schedule_settings(
@@ -331,7 +342,7 @@ async def test_assign_keeps_existing_schedule_settings(
 ) -> None:
     """A playlist the group already knows keeps its per-group schedule."""
     monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(), ok(), ok()])
     client = make_client(session)
     scheduled = {
         "name": "Gaydio Gold",
@@ -348,7 +359,7 @@ async def test_assign_keeps_existing_schedule_settings(
     removed = await client.async_assign_playlist("player1", group, "Gaydio Gold")
 
     assert removed == ["Logo"]
-    _, _, deploy_kwargs = session.calls[1]
+    _, _, deploy_kwargs = session.calls[2]
     assert deploy_kwargs["json"]["playlists"] == [scheduled]
 
 
@@ -361,7 +372,9 @@ async def test_assign_survives_a_failed_pin(monkeypatch: pytest.MonkeyPatch) -> 
             200, {"success": False, "stat_message": "playlist not deployed"}
         )
 
-    session = FakeSession([login_ok(), ok(), failure(), failure(), failure()])
+    session = FakeSession(
+        [login_ok(), playlist_ok(["x.mp4"]), ok(), failure(), failure(), failure()]
+    )
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -373,11 +386,11 @@ async def test_assign_survives_a_failed_pin(monkeypatch: pytest.MonkeyPatch) -> 
     removed = await client.async_assign_playlist("player1", group, "NewYearSale")
 
     assert removed == ["Old"]
-    assert session.paths[1] == "groups/group1"
+    assert session.paths[2] == "groups/group1"
 
 
 async def test_playlist_name_with_spaces_is_encoded() -> None:
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -387,6 +400,8 @@ async def test_playlist_name_with_spaces_is_encoded() -> None:
 
     await client.async_assign_playlist("player1", group, "Summer Sale")
 
+    # Both the asset lookup and the pin have to encode the space.
+    assert session.paths[1] == "playlists/Summer%20Sale"
     assert session.paths[-1] == "setplaylist/player1/Summer%20Sale"
 
 
@@ -400,7 +415,7 @@ async def test_assign_without_group_id_raises() -> None:
 
 async def test_redeploy_re_deploys_the_group_and_pins() -> None:
     """The follow-up nudge deploys the group again and pins, like Deploy does."""
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(["ny.mp4"]), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -413,17 +428,19 @@ async def test_redeploy_re_deploys_the_group_and_pins() -> None:
 
     assert session.paths == [
         "session",
+        "playlists/NewYearSale",
         "groups/group1",
         "setplaylist/player1/NewYearSale",
     ]
-    _, _, deploy_kwargs = session.calls[1]
+    _, _, deploy_kwargs = session.calls[2]
     assert deploy_kwargs["json"]["deploy"] is True
     assert [e["name"] for e in deploy_kwargs["json"]["playlists"]] == ["NewYearSale"]
+    assert deploy_kwargs["json"]["assets"] == ["ny.mp4"]
 
 
 async def test_redeploy_keeps_existing_schedule_settings() -> None:
     """Re-deploying must not strip the playlist's per-group schedule."""
-    session = FakeSession([login_ok(), ok(), ok()])
+    session = FakeSession([login_ok(), playlist_ok(), ok(), ok()])
     client = make_client(session)
     scheduled = {
         "name": "Gaydio Gold",
@@ -437,8 +454,11 @@ async def test_redeploy_keeps_existing_schedule_settings() -> None:
 
     await client.async_redeploy_playlist("player1", group, "Gaydio Gold")
 
-    _, _, deploy_kwargs = session.calls[1]
-    assert deploy_kwargs["json"]["playlists"] == [scheduled]
+    _, _, deploy_kwargs = session.calls[2]
+    # The schedule survives; only skipForSchedule is forced on so it plays.
+    assert deploy_kwargs["json"]["playlists"] == [
+        {**scheduled, "skipForSchedule": False}
+    ]
 
 
 async def test_redeploy_survives_a_failed_pin() -> None:
@@ -446,6 +466,7 @@ async def test_redeploy_survives_a_failed_pin() -> None:
     session = FakeSession(
         [
             login_ok(),
+            playlist_ok(["x.mp4"]),
             ok(),
             FakeResponse(200, {"success": False, "stat_message": "not deployed"}),
         ]
@@ -456,7 +477,7 @@ async def test_redeploy_survives_a_failed_pin() -> None:
     # The deploy went out; the failed pin is swallowed rather than raised.
     await client.async_redeploy_playlist("player1", group, "NewYearSale")
 
-    assert session.paths[1] == "groups/group1"
+    assert session.paths[2] == "groups/group1"
 
 
 async def test_redeploy_without_group_id_raises() -> None:
@@ -465,3 +486,47 @@ async def test_redeploy_without_group_id_raises() -> None:
 
     with pytest.raises(PiSignageError, match="no id"):
         await client.async_redeploy_playlist("player1", {}, "Promos")
+
+
+async def test_assign_deploys_without_assets_when_playlist_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deploy plain if the asset list cannot be read.
+
+    Sending an empty asset list would be worse than sending none — it would drop
+    the playlist from scheduling entirely.
+    """
+    monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
+    lookup_fails = FakeResponse(200, {"success": False, "stat_message": "no playlist"})
+    session = FakeSession([login_ok(), lookup_fails, ok(), ok()])
+    client = make_client(session)
+    group = {"_id": "group1", "playlists": [], "deployedPlaylists": []}
+
+    await client.async_assign_playlist("player1", group, "NewYearSale")
+
+    _, _, deploy_kwargs = session.calls[2]
+    # The deploy still happened, but with no 'assets' key (not an empty list).
+    assert deploy_kwargs["json"]["deploy"] is True
+    assert "assets" not in deploy_kwargs["json"]
+
+
+async def test_get_playlist_assets_collects_filenames() -> None:
+    session = FakeSession(
+        [
+            login_ok(),
+            ok(
+                {
+                    "name": "Promos",
+                    "assets": [
+                        {"filename": "a.mp4"},
+                        {"filename": "b.png"},
+                        {"filename": "a.mp4"},  # duplicate is dropped
+                        {"duration": 10},  # no filename is ignored
+                    ],
+                }
+            ),
+        ]
+    )
+    client = make_client(session)
+
+    assert await client.async_get_playlist_assets("Promos") == ["a.mp4", "b.png"]

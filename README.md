@@ -74,7 +74,10 @@ this" concept in piSignage at all.
 
 To make an assignment persistent — the screen shows this playlist and keeps showing it —
 the integration sets the group's playlist list to **exactly** the playlist you chose,
-then deploys.
+rebuilds the group's asset list from that playlist, then deploys. (Rebuilding the asset
+list matters: piSignage silently skips a playlist whose files are not in the group's
+asset list, so a deploy that omits it lands and downloads content but never actually
+switches the screen — which is what pressing **Deploy** in the console works around.)
 
 > [!WARNING]
 > Selecting a playlist **removes the group's other playlists**, including any schedules
