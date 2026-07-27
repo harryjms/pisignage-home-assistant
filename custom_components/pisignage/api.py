@@ -30,6 +30,7 @@ Other live-API quirks worth knowing, each verified against a real account:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from http import HTTPStatus
 import logging
@@ -45,11 +46,6 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 #: Pages to walk before giving up, so a misbehaving server cannot loop forever.
 MAX_PAGES = 50
 PER_PAGE = 100
-
-#: A freshly deployed playlist is not immediately accepted by ``/setplaylist`` —
-#: the player has to sync it first. Retry the pin a few times before complaining.
-PIN_ATTEMPTS = 3
-PIN_RETRY_DELAY = 2.0
 
 #: A player is considered offline once its last check-in is older than this.
 OFFLINE_AFTER_SECONDS = 300
@@ -139,23 +135,113 @@ def extract_list(data: Any) -> list[Any]:
     return []
 
 
-def single_playlist_entry(group: dict[str, Any], playlist: str) -> dict[str, Any]:
-    """Build the group entry that makes *playlist* the group's only playlist.
+#: Per-playlist settings the console copies from the playlist onto the group's
+#: entry for it before deploying.
+PLAYLIST_SETTING_KEYS = (
+    "ads",
+    "domination",
+    "event",
+    "keyPress",
+    "onlineOnly",
+    "audio",
+)
 
-    Reuses the group's own entry when it already knows this playlist, so its
-    schedule and per-group settings survive being made the sole entry. Falls
-    back to a bare entry when the group has never carried it.
+#: Zone columns an asset row can carry alongside its main file.
+ZONE_KEYS = ("side", "bottom", "zone4", "zone5", "zone6")
+
+
+def _playlist_type(playlist: dict[str, Any], has_assets: bool) -> str:
+    """Classify a playlist the way the console does before deploying.
+
+    The player uses ``plType`` to decide how to treat each entry, so an entry
+    deployed without one is not played.
     """
-    pending = [
-        entry for entry in (group.get("playlists") or []) if isinstance(entry, dict)
-    ]
-    existing = next((entry for entry in pending if entry.get("name") == playlist), None)
-    entry = dict(existing) if existing else {"name": playlist, "settings": {}}
-    # A group silently drops a playlist from its schedule when this flag is set,
-    # so an entry reused from a previously-skipped state would never play. The
-    # one we are deliberately assigning must be eligible.
-    entry["skipForSchedule"] = False
-    return entry
+    if playlist.get("name") == "TV_OFF":
+        return "special"
+    if not has_assets:
+        return "no assets"
+
+    settings = playlist.get("settings") or {}
+
+    def enabled(key: str, flag: str) -> bool:
+        value = settings.get(key)
+        return bool(isinstance(value, dict) and value.get(flag))
+
+    if enabled("ads", "adPlaylist"):
+        return "advt"
+    if enabled("domination", "enable"):
+        return "domination"
+    if enabled("event", "enable"):
+        return "event"
+    if enabled("keyPress", "enable"):
+        return "keyPress"
+    if enabled("audio", "enable"):
+        return "audio"
+    return "regular"
+
+
+def build_deploy_payload(
+    group: dict[str, Any],
+    playlist: str,
+    details: dict[str, Any],
+    resolve: Callable[[str], dict[str, Any] | None] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Build the group entry and asset list for deploying *playlist* alone.
+
+    This mirrors what the piSignage console assembles before it deploys, which
+    is the only combination the player actually acts on:
+
+    * every media file the playlist uses, plus the files of any playlist
+      embedded in one of its zones,
+    * ``__<playlist>.json`` — the playlist's own descriptor. **Without this the
+      player downloads the media and then has nothing telling it what to play,
+      so the screen keeps showing whatever it showed before.**
+    * the custom template, if the playlist uses one, and the group's logo,
+    * ``plType`` and ``skipForSchedule`` on the entry, plus the playlist's own
+      ads/domination/event/keyPress/onlineOnly/audio settings.
+
+    *resolve* looks up another playlist by name, for zone-embedded playlists.
+    """
+    assets: list[str] = []
+
+    def add(name: Any) -> None:
+        if (
+            isinstance(name, str)
+            and name
+            and not name.startswith("_system")
+            and name not in assets
+        ):
+            assets.append(name)
+
+    rows = [row for row in (details.get("assets") or []) if isinstance(row, dict)]
+    for row in rows:
+        add(row.get("filename"))
+        for zone in ZONE_KEYS:
+            value = row.get(zone)
+            if not isinstance(value, str) or not value:
+                continue
+            add(value)
+            # A zone can hold a whole playlist, referenced as __name.json; its
+            # files have to travel too or the zone renders empty.
+            if value.startswith("__") and ".json" in value and resolve is not None:
+                nested = resolve(value[2 : value.index(".json")])
+                for nested_row in (nested or {}).get("assets") or []:
+                    if isinstance(nested_row, dict):
+                        add(nested_row.get("filename"))
+
+    # The descriptor is what turns downloaded files into a playable playlist.
+    add(f"__{playlist}.json")
+    add(details.get("templateName"))
+    add(group.get("logo"))
+
+    settings = details.get("settings") or {}
+    entry: dict[str, Any] = {
+        "name": playlist,
+        "skipForSchedule": not rows and playlist != "TV_OFF",
+        "plType": _playlist_type({**details, "name": playlist}, bool(rows)),
+        "settings": {key: settings.get(key) for key in PLAYLIST_SETTING_KEYS},
+    }
+    return entry, assets
 
 
 def _stringify_params(params: dict[str, Any] | None) -> dict[str, str] | None:
@@ -377,183 +463,83 @@ class PiSignageClient:
     # writes
     # ------------------------------------------------------------------
 
-    async def async_set_player_playlist(self, player_id: str, playlist: str) -> None:
-        """Pin one player to a playlist that is already deployed to it."""
-        await self._request(
-            "POST", f"setplaylist/{quote(player_id)}/{quote(playlist, safe='')}"
-        )
-
-    async def async_get_playlist_assets(self, playlist: str) -> list[str]:
-        """Return the asset filenames a playlist is built from.
-
-        A group only schedules and shows a playlist whose files are present in
-        the group's own ``assets`` list — piSignage silently skips a playlist
-        whose assets are missing from it. The group asset list therefore has to
-        be rebuilt from the chosen playlist before every deploy, exactly as the
-        piSignage console does; otherwise the deploy lands and the player
-        downloads, but the screen never switches to the new playlist.
-        """
+    async def async_get_playlist(self, playlist: str) -> dict[str, Any]:
+        """Fetch one playlist in full, including its asset rows and settings."""
         data = await self._request("GET", f"playlists/{quote(playlist, safe='')}")
-        if not isinstance(data, dict):
-            return []
-        assets: list[str] = []
-        for row in data.get("assets") or []:
-            if isinstance(row, dict):
-                name = row.get("filename")
-                if isinstance(name, str) and name and name not in assets:
-                    assets.append(name)
-        return assets
-
-    async def async_set_group_playlists(
-        self,
-        group_id: str,
-        entries: list[dict[str, Any]],
-        *,
-        assets: list[str] | None = None,
-        deploy: bool = True,
-    ) -> None:
-        """Replace a group's playlist list and push it to its players.
-
-        ``POST /groups/{id}`` is a partial update at the top level, but the
-        ``playlists`` array is replaced wholesale, so *entries* becomes the
-        group's complete list. Pass whole entry dicts to keep their per-group
-        schedule settings intact.
-
-        *assets* is the group's needed-asset list. It must name the files the
-        entries use, or piSignage deploys the group and the player downloads the
-        content but never switches the screen to the new playlist. Pass ``None``
-        to leave the group's existing asset list untouched.
-        """
-        body: dict[str, Any] = {"playlists": entries, "deploy": deploy}
-        if assets is not None:
-            body["assets"] = assets
-        await self._request(
-            "POST",
-            f"groups/{quote(str(group_id))}",
-            json=body,
-        )
-
-    async def _async_deploy_playlist_to_group(
-        self, group: dict[str, Any], playlist: str
-    ) -> None:
-        """Make *playlist* the group's only entry and deploy it, assets and all.
-
-        Rebuilds the group's asset list from the playlist so the deploy actually
-        takes effect on the screen, then replaces the group's playlists with just
-        this one and deploys. A failure to read the assets falls back to a plain
-        deploy rather than sending an empty asset list, which would make matters
-        worse by dropping the playlist from scheduling entirely.
-        """
-        group_id = group.get("_id")
-        entry = single_playlist_entry(group, playlist)
-        try:
-            assets: list[str] | None = await self.async_get_playlist_assets(playlist)
-        except PiSignageAuthError:
-            raise
-        except PiSignageError as err:
-            _LOGGER.debug(
-                "Could not read assets for '%s'; deploying without refreshing the "
-                "group asset list: %s",
-                playlist,
-                err,
-            )
-            assets = None
-        await self.async_set_group_playlists(str(group_id), [entry], assets=assets)
+        if isinstance(data, dict):
+            return data
+        raise PiSignageError(f"Playlist {playlist} returned an unexpected payload")
 
     async def async_assign_playlist(
-        self, player_id: str, group: dict[str, Any], playlist: str
+        self, group: dict[str, Any], playlist: str
     ) -> list[str]:
-        """Make *playlist* the group's only playlist, persistently.
+        """Make *playlist* the group's only playlist and deploy it.
 
-        piSignage has no per-screen playlist assignment: a group plays its
-        whole eligible set, and ``/setplaylist`` is only a one-shot that plays
-        something once before the rotation resumes. The only way to make a
-        screen keep showing one playlist is to make it the group's entire set,
-        which is what this does.
+        piSignage has no per-screen playlist assignment: playlists belong to a
+        group, so making a screen show one playlist means making it that group's
+        entire set.
 
-        The deploy is unconditional, including when the playlist is already the
-        group's only entry. Selecting a playlist is therefore also a way to
-        force a screen back into line if it has drifted, rather than a no-op
-        that leaves a wrong-looking screen wrong.
+        The deploy is assembled the way the console's own Deploy button
+        assembles it — the group is re-read, the playlist's descriptor and files
+        are collected into the group's asset list, the entry is given its
+        ``plType`` and settings, and the whole group object is posted with
+        ``deploy``. Anything less is accepted by the server and then ignored by
+        the player, which is why a screen used to download new content and carry
+        on showing the old playlist.
 
-        Returns the playlists that were removed from the group, so the caller
-        can tell the user what changed. An empty list means the group already
-        held only this playlist and nothing was dropped — a deploy still went
-        out.
+        Returns the playlists that were dropped from the group, so the caller can
+        say what changed. An empty list means nothing was dropped — the deploy
+        still went out, so re-selecting is a way to force a drifted screen back.
         """
         group_id = group.get("_id")
         if not group_id:
             raise PiSignageError("Group has no id, cannot assign a playlist")
 
+        # Re-read the group rather than trusting the poll snapshot: the whole
+        # object is posted back, and stale fields would undo console-side edits.
+        try:
+            current = await self.async_get_group(str(group_id))
+        except PiSignageError:
+            current = group
+
         deployed = [
             entry.get("name")
-            for entry in (group.get("deployedPlaylists") or [])
+            for entry in (current.get("deployedPlaylists") or [])
             if isinstance(entry, dict)
         ]
-
         removed = [name for name in deployed if name and name != playlist]
 
-        await self._async_deploy_playlist_to_group(group, playlist)
+        details = await self.async_get_playlist(playlist)
 
-        # The deploy above is what makes the change persist. Pinning only
-        # shortens the gap before the screen catches up, so a failure here is
-        # not worth failing the whole operation over.
-        for attempt in range(PIN_ATTEMPTS):
-            try:
-                await self.async_set_player_playlist(player_id, playlist)
-            except PiSignageAuthError:
-                raise
-            except PiSignageError as err:
-                if attempt == PIN_ATTEMPTS - 1:
-                    _LOGGER.debug(
-                        "Assigned %s to group %s but could not start it "
-                        "immediately; it will begin after the player syncs: %s",
-                        playlist,
-                        group.get("name") or group_id,
-                        err,
-                    )
-                    break
-                await asyncio.sleep(PIN_RETRY_DELAY)
-            else:
-                break
+        # A zone can embed another playlist as __name.json; its files have to be
+        # deployed too. Fetch those up front so the builder stays synchronous.
+        nested: dict[str, dict[str, Any]] = {}
+        for row in details.get("assets") or []:
+            if not isinstance(row, dict):
+                continue
+            for zone in ZONE_KEYS:
+                value = row.get(zone)
+                if (
+                    isinstance(value, str)
+                    and value.startswith("__")
+                    and ".json" in value
+                ):
+                    name = value[2 : value.index(".json")]
+                    if name not in nested:
+                        try:
+                            nested[name] = await self.async_get_playlist(name)
+                        except PiSignageError:
+                            _LOGGER.debug("Zone playlist '%s' could not be read", name)
+
+        entry, assets = build_deploy_payload(current, playlist, details, nested.get)
+
+        body = {key: value for key, value in current.items() if key != "_id"}
+        body["playlists"] = [entry]
+        body["assets"] = assets
+        body["deploy"] = True
+        await self._request("POST", f"groups/{quote(str(group_id))}", json=body)
 
         return removed
-
-    async def async_redeploy_playlist(
-        self, player_id: str, group: dict[str, Any], playlist: str
-    ) -> None:
-        """Re-run the deploy that flips an already-synced player onto *playlist*.
-
-        The first assignment starts the player downloading the playlist's
-        assets, but a player will not switch to a playlist whose content has not
-        finished downloading. Once it has, the player needs a fresh deploy to
-        actually change over — the same thing pressing **Deploy** in the
-        piSignage console does. This re-sends that deploy, then pins the playlist
-        to switch it immediately.
-
-        Best-effort by design: the poll loop calls it once per cycle until the
-        screen reports the playlist, so a single failed pin just means the next
-        cycle tries again. The group deploy is the durable part and is allowed to
-        raise; a failed pin is not.
-        """
-        group_id = group.get("_id")
-        if not group_id:
-            raise PiSignageError("Group has no id, cannot redeploy a playlist")
-
-        await self._async_deploy_playlist_to_group(group, playlist)
-
-        try:
-            await self.async_set_player_playlist(player_id, playlist)
-        except PiSignageAuthError:
-            raise
-        except PiSignageError as err:
-            _LOGGER.debug(
-                "Re-deployed %s to group %s but could not pin it immediately; "
-                "it will switch once the player picks the deploy up: %s",
-                playlist,
-                group.get("name") or group_id,
-                err,
-            )
 
     # ------------------------------------------------------------------
     # setup helpers

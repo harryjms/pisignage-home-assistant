@@ -73,11 +73,22 @@ something *once* before that rotation resumes. So there is no per-screen "play o
 this" concept in piSignage at all.
 
 To make an assignment persistent — the screen shows this playlist and keeps showing it —
-the integration sets the group's playlist list to **exactly** the playlist you chose,
-rebuilds the group's asset list from that playlist, then deploys. (Rebuilding the asset
-list matters: piSignage silently skips a playlist whose files are not in the group's
-asset list, so a deploy that omits it lands and downloads content but never actually
-switches the screen — which is what pressing **Deploy** in the console works around.)
+the integration sets the group's playlist list to **exactly** the playlist you chose and
+deploys, assembling the deploy the same way the piSignage console's **Deploy** button
+does:
+
+- the group's `assets` list is rebuilt from the playlist — its media files, the files of
+  any playlist embedded in a zone, a custom template, and the group logo;
+- crucially, `__<playlist>.json`, the playlist's own **descriptor**, is included. Without
+  it the player downloads the media and has nothing telling it what to play, so the
+  screen keeps showing the old playlist even though the deploy succeeded;
+- the entry gets its `plType` (`regular`, `advt`, `domination`, `event`, `keyPress`,
+  `audio`, or `special` for `TV_OFF`) and `skipForSchedule`, plus the playlist's own
+  settings. A player ignores an entry with no `plType`;
+- the whole group object is posted back with `deploy: true`.
+
+A partial deploy is accepted by the server and then quietly ignored by the player, which
+is why anything less than the full set above leaves the screen unchanged.
 
 > [!WARNING]
 > Selecting a playlist **removes the group's other playlists**, including any schedules
@@ -101,14 +112,8 @@ The selector shows your choice immediately, while the player is still syncing. I
 back to the polled value once piSignage confirms the change, so if a deploy silently
 fails the entity will revert rather than lie to you.
 
-A player will not switch to a playlist until it has finished downloading the content,
-and the deploy that started the download does not, on its own, flip the screen over once
-the download lands — that is why a freshly selected screen can sit downloading without
-changing until someone presses **Deploy** in the console. The integration now does that
-follow-up for you: it keeps an eye on the screen after a selection and, once the download
-has finished but the screen is still on the old playlist, re-deploys it automatically,
-retrying each poll until the screen actually switches (or, after a long while, giving up
-with a warning in the log).
+The screen picks the change up on its next check-in, usually within a minute. Larger
+playlists take longer, because the player downloads the content first.
 
 ## Examples
 
@@ -186,12 +191,11 @@ When automating on this, put a `for:` duration on the trigger so a momentary dro
 not page you — the example above uses 10 minutes.
 
 **I picked a playlist and the screen did not change.**
-If the playlist had to be deployed, the player is probably still downloading it — large
-videos take a while. The screen switches once the download finishes: the integration
-re-deploys it for you each poll until it does, so it should catch up on its own without
-you touching the console. If it never switches, check the Home Assistant log — after a
-long spell of retries the integration logs a warning and stops, which usually points to
-the playlist not being deployable to that player in piSignage.
+Give it a minute — the player only switches on its next check-in, and it downloads the
+content first, which takes longer for large videos. If it still has not changed, check
+the Home Assistant log for an error from the deploy. A screen that downloads the new
+content but keeps showing the old playlist was a bug in versions before 1.3.3; update if
+you are on an older one.
 
 **Another screen changed when I only touched one.**
 Both screens are in the same piSignage group, and assignment is per group. Put each

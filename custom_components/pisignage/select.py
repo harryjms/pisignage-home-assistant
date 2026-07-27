@@ -89,9 +89,7 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
 
         try:
             group = await self.coordinator.async_get_player_group(self._player_id)
-            removed = await self.coordinator.client.async_assign_playlist(
-                self._player_id, group, option
-            )
+            removed = await self.coordinator.client.async_assign_playlist(group, option)
         except PiSignageError as err:
             self._optimistic_option = None  # fall back to the polled value
             raise HomeAssistantError(
@@ -100,10 +98,6 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
                 translation_placeholders={"playlist": option, "error": str(err)},
             ) from err
         else:
-            # The deploy has started the screen downloading; the coordinator
-            # keeps nudging it until it actually switches, so a slow download no
-            # longer leaves the screen stuck on the old playlist.
-            self.coordinator.async_track_assignment(self._player_id, option)
             if removed:
                 _LOGGER.warning(
                     "Assigned '%s' to group '%s', removing %s from it. Every "
