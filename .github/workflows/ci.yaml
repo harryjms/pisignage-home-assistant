@@ -24,6 +24,11 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # "brands" only passes for integrations accepted into the
+          # home-assistant/brands repository. This is installed as a HACS
+          # custom repository, so the check can never pass and does not
+          # affect installation.
+          ignore: brands
 
   test:
     name: Lint and test

@@ -69,10 +69,10 @@
   },
   "exceptions": {
     "unknown_playlist": {
-      "message": "There is no playlist named '{playlist}' on this piSignage account."
+      "message": "There is no playlist named {playlist} on this piSignage account."
     },
     "set_playlist_failed": {
-      "message": "Could not switch to playlist '{playlist}': {error}"
+      "message": "Could not switch to playlist {playlist}. {error}"
     }
   }
 }
