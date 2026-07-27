@@ -139,6 +139,20 @@ def extract_list(data: Any) -> list[Any]:
     return []
 
 
+def single_playlist_entry(group: dict[str, Any], playlist: str) -> dict[str, Any]:
+    """Build the group entry that makes *playlist* the group's only playlist.
+
+    Reuses the group's own entry when it already knows this playlist, so its
+    schedule and per-group settings survive being made the sole entry. Falls
+    back to a bare entry when the group has never carried it.
+    """
+    pending = [
+        entry for entry in (group.get("playlists") or []) if isinstance(entry, dict)
+    ]
+    existing = next((entry for entry in pending if entry.get("name") == playlist), None)
+    return dict(existing) if existing else {"name": playlist, "settings": {}}
+
+
 def _stringify_params(params: dict[str, Any] | None) -> dict[str, str] | None:
     """Aiohttp only accepts primitive query values, so coerce everything."""
     if not params:
@@ -410,18 +424,10 @@ class PiSignageClient:
             for entry in (group.get("deployedPlaylists") or [])
             if isinstance(entry, dict)
         ]
-        pending = [
-            entry for entry in (group.get("playlists") or []) if isinstance(entry, dict)
-        ]
 
         removed = [name for name in deployed if name and name != playlist]
 
-        # Reuse the group's own entry when it already knows this playlist, so
-        # its schedule and per-group settings survive the assignment.
-        existing = next(
-            (entry for entry in pending if entry.get("name") == playlist), None
-        )
-        entry = dict(existing) if existing else {"name": playlist, "settings": {}}
+        entry = single_playlist_entry(group, playlist)
         await self.async_set_group_playlists(str(group_id), [entry])
 
         # The deploy above is what makes the change persist. Pinning only
@@ -447,6 +453,43 @@ class PiSignageClient:
                 break
 
         return removed
+
+    async def async_redeploy_playlist(
+        self, player_id: str, group: dict[str, Any], playlist: str
+    ) -> None:
+        """Re-run the deploy that flips an already-synced player onto *playlist*.
+
+        The first assignment starts the player downloading the playlist's
+        assets, but a player will not switch to a playlist whose content has not
+        finished downloading. Once it has, the player needs a fresh deploy to
+        actually change over — the same thing pressing **Deploy** in the
+        piSignage console does. This re-sends that deploy, then pins the playlist
+        to switch it immediately.
+
+        Best-effort by design: the poll loop calls it once per cycle until the
+        screen reports the playlist, so a single failed pin just means the next
+        cycle tries again. The group deploy is the durable part and is allowed to
+        raise; a failed pin is not.
+        """
+        group_id = group.get("_id")
+        if not group_id:
+            raise PiSignageError("Group has no id, cannot redeploy a playlist")
+
+        entry = single_playlist_entry(group, playlist)
+        await self.async_set_group_playlists(str(group_id), [entry])
+
+        try:
+            await self.async_set_player_playlist(player_id, playlist)
+        except PiSignageAuthError:
+            raise
+        except PiSignageError as err:
+            _LOGGER.debug(
+                "Re-deployed %s to group %s but could not pin it immediately; "
+                "it will switch once the player picks the deploy up: %s",
+                playlist,
+                group.get("name") or group_id,
+                err,
+            )
 
     # ------------------------------------------------------------------
     # setup helpers

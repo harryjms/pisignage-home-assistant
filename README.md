@@ -98,6 +98,15 @@ The selector shows your choice immediately, while the player is still syncing. I
 back to the polled value once piSignage confirms the change, so if a deploy silently
 fails the entity will revert rather than lie to you.
 
+A player will not switch to a playlist until it has finished downloading the content,
+and the deploy that started the download does not, on its own, flip the screen over once
+the download lands — that is why a freshly selected screen can sit downloading without
+changing until someone presses **Deploy** in the console. The integration now does that
+follow-up for you: it keeps an eye on the screen after a selection and, once the download
+has finished but the screen is still on the old playlist, re-deploys it automatically,
+retrying each poll until the screen actually switches (or, after a long while, giving up
+with a warning in the log).
+
 ## Examples
 
 Switch the lobby screen to the promo playlist when the shop opens:
@@ -174,9 +183,12 @@ When automating on this, put a `for:` duration on the trigger so a momentary dro
 not page you — the example above uses 10 minutes.
 
 **I picked a playlist and the screen did not change.**
-Check the Home Assistant log. If the playlist had to be deployed, the player may still
-be downloading it — large videos take a while. The screen should switch once the sync
-completes, and the entity will catch up on the next poll.
+If the playlist had to be deployed, the player is probably still downloading it — large
+videos take a while. The screen switches once the download finishes: the integration
+re-deploys it for you each poll until it does, so it should catch up on its own without
+you touching the console. If it never switches, check the Home Assistant log — after a
+long spell of retries the integration logs a warning and stops, which usually points to
+the playlist not being deployable to that player in piSignage.
 
 **Another screen changed when I only touched one.**
 Both screens are in the same piSignage group, and assignment is per group. Put each

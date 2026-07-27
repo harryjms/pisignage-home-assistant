@@ -396,3 +396,72 @@ async def test_assign_without_group_id_raises() -> None:
 
     with pytest.raises(PiSignageError, match="no id"):
         await client.async_assign_playlist("player1", {}, "Promos")
+
+
+async def test_redeploy_re_deploys_the_group_and_pins() -> None:
+    """The follow-up nudge deploys the group again and pins, like Deploy does."""
+    session = FakeSession([login_ok(), ok(), ok()])
+    client = make_client(session)
+    group = {
+        "_id": "group1",
+        "name": "Stores",
+        "playlists": [{"name": "NewYearSale", "settings": {}}],
+        "deployedPlaylists": [{"name": "NewYearSale", "settings": {}}],
+    }
+
+    await client.async_redeploy_playlist("player1", group, "NewYearSale")
+
+    assert session.paths == [
+        "session",
+        "groups/group1",
+        "setplaylist/player1/NewYearSale",
+    ]
+    _, _, deploy_kwargs = session.calls[1]
+    assert deploy_kwargs["json"]["deploy"] is True
+    assert [e["name"] for e in deploy_kwargs["json"]["playlists"]] == ["NewYearSale"]
+
+
+async def test_redeploy_keeps_existing_schedule_settings() -> None:
+    """Re-deploying must not strip the playlist's per-group schedule."""
+    session = FakeSession([login_ok(), ok(), ok()])
+    client = make_client(session)
+    scheduled = {
+        "name": "Gaydio Gold",
+        "settings": {"timeEnable": True, "starttime": "19:55", "endtime": "00:00"},
+    }
+    group = {
+        "_id": "group1",
+        "playlists": [scheduled],
+        "deployedPlaylists": [scheduled],
+    }
+
+    await client.async_redeploy_playlist("player1", group, "Gaydio Gold")
+
+    _, _, deploy_kwargs = session.calls[1]
+    assert deploy_kwargs["json"]["playlists"] == [scheduled]
+
+
+async def test_redeploy_survives_a_failed_pin() -> None:
+    """A slow player rejecting the pin must not turn the nudge into an error."""
+    session = FakeSession(
+        [
+            login_ok(),
+            ok(),
+            FakeResponse(200, {"success": False, "stat_message": "not deployed"}),
+        ]
+    )
+    client = make_client(session)
+    group = {"_id": "group1", "playlists": [], "deployedPlaylists": []}
+
+    # The deploy went out; the failed pin is swallowed rather than raised.
+    await client.async_redeploy_playlist("player1", group, "NewYearSale")
+
+    assert session.paths[1] == "groups/group1"
+
+
+async def test_redeploy_without_group_id_raises() -> None:
+    session = FakeSession([login_ok()])
+    client = make_client(session)
+
+    with pytest.raises(PiSignageError, match="no id"):
+        await client.async_redeploy_playlist("player1", {}, "Promos")

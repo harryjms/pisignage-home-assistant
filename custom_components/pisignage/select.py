@@ -100,6 +100,10 @@ class PiSignagePlaylistSelect(PiSignageEntity, SelectEntity):
                 translation_placeholders={"playlist": option, "error": str(err)},
             ) from err
         else:
+            # The deploy has started the screen downloading; the coordinator
+            # keeps nudging it until it actually switches, so a slow download no
+            # longer leaves the screen stuck on the old playlist.
+            self.coordinator.async_track_assignment(self._player_id, option)
             if removed:
                 _LOGGER.warning(
                     "Assigned '%s' to group '%s', removing %s from it. Every "

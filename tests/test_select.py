@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.pisignage import coordinator as coordinator_module
 from custom_components.pisignage.api import PiSignageError
 
 from .conftest import iso_now, make_group, make_player
@@ -139,6 +140,116 @@ async def test_polled_value_takes_over_once_it_agrees(
     await hass.async_block_till_done()
 
     assert hass.states.get(SELECT_ENTITY).state == "SomethingElse"
+
+
+async def test_selection_is_nudged_until_the_screen_switches(
+    hass: HomeAssistant, init_integration, mock_client, freezer
+) -> None:
+    """A screen that only downloaded must be re-deployed until it switches.
+
+    The initial deploy makes the player download the playlist but not switch to
+    it; without a follow-up the screen stays on the old playlist until someone
+    presses Deploy in the console. The poll loop must do that follow-up.
+    """
+    await _select(hass, "NewYearSale")
+
+    # The screen has finished syncing but is still showing the old playlist.
+    mock_client.async_redeploy_playlist.reset_mock()
+    mock_client.async_get_players.return_value = [
+        make_player(currentPlaylist="Promos", syncInProgress=False)
+    ]
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    mock_client.async_redeploy_playlist.assert_awaited()
+    player_id, _group, playlist = mock_client.async_redeploy_playlist.await_args.args
+    assert player_id == "player1"
+    assert playlist == "NewYearSale"
+
+    # Once the screen reports the new playlist, the nudging stops for good.
+    mock_client.async_get_players.return_value = [
+        make_player(currentPlaylist="NewYearSale")
+    ]
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    mock_client.async_redeploy_playlist.reset_mock()
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    mock_client.async_redeploy_playlist.assert_not_awaited()
+
+
+async def test_no_nudge_while_the_screen_is_still_downloading(
+    hass: HomeAssistant, init_integration, mock_client, freezer
+) -> None:
+    """Re-deploying mid-download would only disturb the sync, so it waits."""
+    await _select(hass, "NewYearSale")
+
+    mock_client.async_redeploy_playlist.reset_mock()
+    mock_client.async_get_players.return_value = [
+        make_player(currentPlaylist="Promos", syncInProgress=True)
+    ]
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    mock_client.async_redeploy_playlist.assert_not_awaited()
+
+
+async def test_no_nudge_while_the_screen_is_offline(
+    hass: HomeAssistant, init_integration, mock_client, freezer
+) -> None:
+    """An unreachable screen cannot switch, so nudging it is pointless."""
+    await _select(hass, "NewYearSale")
+
+    mock_client.async_redeploy_playlist.reset_mock()
+    mock_client.async_get_players.return_value = [
+        make_player(currentPlaylist="Promos", isConnected=False)
+    ]
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    mock_client.async_redeploy_playlist.assert_not_awaited()
+
+
+async def test_nudging_gives_up_after_the_budget_runs_out(
+    hass: HomeAssistant,
+    init_integration,
+    mock_client,
+    freezer,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A screen that never switches must not be re-deployed forever."""
+    monkeypatch.setattr(coordinator_module, "PENDING_ASSIGNMENT_MAX_POLLS", 2)
+
+    await _select(hass, "NewYearSale")
+    mock_client.async_get_players.return_value = [
+        make_player(currentPlaylist="Promos", syncInProgress=False)
+    ]
+
+    # Poll a handful of times; with a budget of two it will give up quickly.
+    for _ in range(6):
+        freezer.tick(timedelta(seconds=61))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        if "giving up" in caplog.text:
+            break
+
+    assert mock_client.async_redeploy_playlist.await_count >= 1
+    assert "giving up" in caplog.text
+
+    # Once it has given up, no further cycle nudges the screen.
+    mock_client.async_redeploy_playlist.reset_mock()
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    mock_client.async_redeploy_playlist.assert_not_awaited()
 
 
 async def test_failed_selection_does_not_leave_a_false_reading(
