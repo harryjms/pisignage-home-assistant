@@ -88,6 +88,12 @@ then deploys.
 > **Give each screen its own group** if you want them independently controllable —
 > selecting a playlist affects every player in the group.
 
+Every selection deploys, including re-selecting the playlist that is already assigned.
+That makes the selector a way to **force a screen back into line** if it has drifted,
+rather than a no-op that leaves a wrong-looking screen wrong. It also means each
+selection causes that group to re-sync, so drive it from events rather than a fast
+automation loop.
+
 The selector shows your choice immediately, while the player is still syncing. It falls
 back to the polled value once piSignage confirms the change, so if a deploy silently
 fails the entity will revert rather than lie to you.

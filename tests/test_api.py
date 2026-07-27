@@ -267,9 +267,12 @@ async def test_playlist_names_are_deduped_and_sorted() -> None:
     assert await client.async_get_playlist_names() == ["Apple", "zebra"]
 
 
-async def test_assign_when_already_the_sole_playlist_changes_nothing() -> None:
-    """No group write when the assignment already holds — just re-pin."""
-    session = FakeSession([login_ok(), ok()])
+async def test_assign_deploys_even_when_already_assigned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-selecting must still deploy, so it can force a drifted screen back."""
+    monkeypatch.setattr(api_module, "PIN_RETRY_DELAY", 0)
+    session = FakeSession([login_ok(), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",
@@ -280,8 +283,16 @@ async def test_assign_when_already_the_sole_playlist_changes_nothing() -> None:
 
     removed = await client.async_assign_playlist("player1", group, "Promos")
 
+    # Nothing was dropped, but the deploy still went out.
     assert removed == []
-    assert session.paths == ["session", "setplaylist/player1/Promos"]
+    assert session.paths == [
+        "session",
+        "groups/group1",
+        "setplaylist/player1/Promos",
+    ]
+    _, _, kwargs = session.calls[1]
+    assert kwargs["json"]["deploy"] is True
+    assert [e["name"] for e in kwargs["json"]["playlists"]] == ["Promos"]
 
 
 async def test_assign_replaces_the_group_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,7 +377,7 @@ async def test_assign_survives_a_failed_pin(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 async def test_playlist_name_with_spaces_is_encoded() -> None:
-    session = FakeSession([login_ok(), ok()])
+    session = FakeSession([login_ok(), ok(), ok()])
     client = make_client(session)
     group = {
         "_id": "group1",

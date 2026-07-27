@@ -391,9 +391,15 @@ class PiSignageClient:
         screen keep showing one playlist is to make it the group's entire set,
         which is what this does.
 
+        The deploy is unconditional, including when the playlist is already the
+        group's only entry. Selecting a playlist is therefore also a way to
+        force a screen back into line if it has drifted, rather than a no-op
+        that leaves a wrong-looking screen wrong.
+
         Returns the playlists that were removed from the group, so the caller
-        can tell the user what changed. An empty list means the playlist was
-        already the group's sole entry and nothing was altered.
+        can tell the user what changed. An empty list means the group already
+        held only this playlist and nothing was dropped — a deploy still went
+        out.
         """
         group_id = group.get("_id")
         if not group_id:
@@ -409,18 +415,14 @@ class PiSignageClient:
         ]
 
         removed = [name for name in deployed if name and name != playlist]
-        already_sole = deployed == [playlist] and [
-            entry.get("name") for entry in pending
-        ] == [playlist]
 
-        if not already_sole:
-            # Reuse the group's own entry when it already knows this playlist,
-            # so its schedule and per-group settings survive the assignment.
-            existing = next(
-                (entry for entry in pending if entry.get("name") == playlist), None
-            )
-            entry = dict(existing) if existing else {"name": playlist, "settings": {}}
-            await self.async_set_group_playlists(str(group_id), [entry])
+        # Reuse the group's own entry when it already knows this playlist, so
+        # its schedule and per-group settings survive the assignment.
+        existing = next(
+            (entry for entry in pending if entry.get("name") == playlist), None
+        )
+        entry = dict(existing) if existing else {"name": playlist, "settings": {}}
+        await self.async_set_group_playlists(str(group_id), [entry])
 
         # The deploy above is what makes the change persist. Pinning only
         # shortens the gap before the screen catches up, so a failure here is
