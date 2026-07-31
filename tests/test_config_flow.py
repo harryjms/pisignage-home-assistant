@@ -156,4 +156,47 @@ async def test_options_flow_sets_scan_interval(
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert init_integration.options == {CONF_SCAN_INTERVAL: 120}
+    assert init_integration.options[CONF_SCAN_INTERVAL] == 120
+
+
+async def test_options_flow_maps_a_tv_media_player(
+    hass: HomeAssistant, init_integration
+) -> None:
+    """A screen without CEC can borrow a media_player that drives its TV."""
+    from custom_components.pisignage.const import CONF_TV_MEDIA_PLAYERS
+
+    result = await hass.config_entries.options.async_init(init_integration.entry_id)
+    # The field is named after the screen, not its opaque player id.
+    assert "tv_Lobby Screen" in str(result["data_schema"].schema)
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 60, "tv_Lobby Screen": "media_player.lobby_tv"},
+    )
+    await hass.async_block_till_done()
+
+    assert init_integration.options[CONF_TV_MEDIA_PLAYERS] == {
+        "player1": "media_player.lobby_tv"
+    }
+
+
+async def test_options_flow_clears_a_tv_media_player(
+    hass: HomeAssistant, init_integration
+) -> None:
+    """Clearing the field puts the screen back on HDMI-CEC."""
+    from custom_components.pisignage.const import CONF_TV_MEDIA_PLAYERS
+
+    result = await hass.config_entries.options.async_init(init_integration.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 60, "tv_Lobby Screen": "media_player.lobby_tv"},
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(init_integration.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SCAN_INTERVAL: 60}
+    )
+    await hass.async_block_till_done()
+
+    assert init_integration.options[CONF_TV_MEDIA_PLAYERS] == {}

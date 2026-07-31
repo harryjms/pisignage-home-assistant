@@ -44,7 +44,8 @@
         },
         "data_description": {
           "scan_interval": "How often to poll piSignage, in seconds. The hosted service is shared, so keep this at 30 seconds or higher."
-        }
+        },
+        "description": "Pick how often to poll piSignage. For any screen whose TV Home Assistant already controls, you can also choose the media player that switches it on and off — leave a screen blank to use the player's own HDMI-CEC instead."
       }
     }
   },

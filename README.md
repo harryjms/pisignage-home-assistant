@@ -20,7 +20,7 @@ One device is created per player. Each carries:
 | `sensor.<player>_current_playlist` | Sensor | The playing playlist as a plain string, handy in templates. |
 | `binary_sensor.<player>_online` | Binary sensor | `on` when piSignage reports the player connected. Same state the piSignage dashboard shows. |
 | `sensor.<player>_last_seen` | Sensor | Timestamp of the last check-in. Disabled by default. |
-| `switch.<player>_tv` | Switch | Turns the attached TV on and off over HDMI-CEC. **Only created for screens whose player reports CEC support** — see [TV power](#tv-power). |
+| `switch.<player>_tv` | Switch | Turns the attached TV on and off — over HDMI-CEC, or through a `media_player` you map to that screen. See [TV power](#tv-power). |
 
 A screen named *Lobby Screen* gives you `select.lobby_screen_playlist`, and so on.
 
@@ -118,22 +118,37 @@ playlists take longer, because the player downloads the content first.
 
 ## TV power
 
-piSignage can switch the TV attached to a screen on and off over HDMI-CEC, exposed here
-as `switch.<player>_tv`. State comes from the player's own `tvStatus`, so the switch also
-follows the TV being switched off by piSignage's own schedule.
+Each screen can get a `switch.<player>_tv` that turns its TV on and off. There are two
+ways it can drive the TV, and a screen gets a switch if **either** is available.
 
-The switch is **only created for players reporting `isCecSupported`**. piSignage accepts
-the command for any player and reports success regardless, so on a screen without working
-CEC the switch would silently do nothing. Support is read on every poll rather than fixed
-at startup, because a player probes its TV after booting and can report CEC a little
-later — the switch appears on its own when it does.
+### Over HDMI-CEC
+
+piSignage can switch the TV through the player itself. This is used automatically for
+players reporting `isCecSupported`, with state from the player's own `tvStatus` — so the
+switch also follows the TV being switched off by piSignage's own schedule.
+
+CEC support is re-read on every poll rather than fixed at startup, because a player probes
+its TV after booting and can report CEC a little later. The switch appears on its own when
+it does.
 
 > [!NOTE]
-> Switching the TV **off** works by putting the player on piSignage's special `TV_OFF`
-> playlist, not by stopping playback. Switching it back **on** restores power but leaves
-> the player on `TV_OFF`, so the screen comes back lit but without content. Select the
-> screen's playlist again to bring it back — that deploys, and the content returns once
-> the player has synced.
+> Switching the TV **off** over CEC works by putting the player on piSignage's special
+> `TV_OFF` playlist, not by stopping playback. Switching it back **on** restores power but
+> leaves the player on `TV_OFF`, so the screen comes back lit but without content. Select
+> the screen's playlist again to bring it back.
+
+### Through a `media_player` entity
+
+Plenty of screens have no working CEC but hang off a TV that Home Assistant already
+controls another way. **Configure** on the integration lists every screen and lets you
+pick a `media_player` entity for it. When one is set, that screen's TV switch calls
+`media_player.turn_on` / `turn_off` on your entity instead of talking to piSignage, and
+takes its state from that entity — which is the truth, since piSignage knows nothing about
+a TV it is not driving. Clearing the field puts the screen back on CEC.
+
+A mapped entity wins over CEC, and a screen with neither gets no switch at all: piSignage
+reports success for the CEC command whether or not the TV can act on it, so an
+always-succeeding switch that changes nothing would be worse than none.
 
 ## Examples
 

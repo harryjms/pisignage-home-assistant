@@ -18,6 +18,12 @@ PLATFORMS: Final[list[Platform]] = [
 
 CONF_ACCOUNT: Final = "account"
 
+#: Maps a player id to a ``media_player`` entity that controls its TV. Screens
+#: whose player cannot reach the TV over HDMI-CEC get their TV switch from this
+#: instead, so a TV that Home Assistant already controls another way is still
+#: usable from the screen's device page.
+CONF_TV_MEDIA_PLAYERS: Final = "tv_media_players"
+
 # The hosted service is shared infrastructure and its own docs put the polling
 # floor at 30-60s, so 60s is the default and 30s the hard minimum.
 DEFAULT_SCAN_INTERVAL: Final = 60

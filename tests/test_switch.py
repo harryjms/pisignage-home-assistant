@@ -13,9 +13,13 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 import pytest
-from pytest_homeassistant_custom_component.common import async_fire_time_changed
+from pytest_homeassistant_custom_component.common import (
+    async_fire_time_changed,
+    async_mock_service,
+)
 
 from custom_components.pisignage.api import PiSignageError
+from custom_components.pisignage.const import CONF_TV_MEDIA_PLAYERS
 
 from .conftest import make_player
 
@@ -133,3 +137,72 @@ async def test_failure_surfaces_and_leaves_no_false_reading(
     await hass.async_block_till_done()
 
     assert hass.states.get(TV_ENTITY).state == STATE_ON
+
+
+async def test_media_player_backed_switch_for_screen_without_cec(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    """A mapped media_player gives a non-CEC screen a working TV switch."""
+    hass.states.async_set("media_player.lobby_tv", STATE_ON)
+    mock_client.async_get_players.return_value = [make_player(isCecSupported=False)]
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={CONF_TV_MEDIA_PLAYERS: {"player1": "media_player.lobby_tv"}},
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(TV_ENTITY).state == STATE_ON
+
+
+async def test_media_player_delegation_calls_the_media_player(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    """The command must go to the media player, never to piSignage."""
+    hass.states.async_set("media_player.lobby_tv", STATE_ON)
+    calls = async_mock_service(hass, "media_player", SERVICE_TURN_OFF)
+
+    mock_client.async_get_players.return_value = [make_player(isCecSupported=False)]
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={CONF_TV_MEDIA_PLAYERS: {"player1": "media_player.lobby_tv"}},
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    await _switch(hass, SERVICE_TURN_OFF)
+
+    assert len(calls) == 1
+    assert calls[0].data[ATTR_ENTITY_ID] == "media_player.lobby_tv"
+    mock_client.async_set_tv_power.assert_not_awaited()
+
+
+async def test_delegated_switch_follows_the_media_player(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    """The media player is the truth — piSignage knows nothing about that TV."""
+    hass.states.async_set("media_player.lobby_tv", STATE_ON)
+    mock_client.async_get_players.return_value = [make_player(isCecSupported=False)]
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={CONF_TV_MEDIA_PLAYERS: {"player1": "media_player.lobby_tv"}},
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.states.async_set("media_player.lobby_tv", STATE_OFF)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(TV_ENTITY).state == STATE_OFF
+
+
+async def test_cec_still_wins_when_no_mapping(
+    hass: HomeAssistant, init_integration, mock_client
+) -> None:
+    """Without a mapping a CEC-capable screen keeps using piSignage."""
+    await _switch(hass, SERVICE_TURN_OFF)
+
+    mock_client.async_set_tv_power.assert_awaited_once()
