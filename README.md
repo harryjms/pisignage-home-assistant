@@ -20,6 +20,7 @@ One device is created per player. Each carries:
 | `sensor.<player>_current_playlist` | Sensor | The playing playlist as a plain string, handy in templates. |
 | `binary_sensor.<player>_online` | Binary sensor | `on` when piSignage reports the player connected. Same state the piSignage dashboard shows. |
 | `sensor.<player>_last_seen` | Sensor | Timestamp of the last check-in. Disabled by default. |
+| `switch.<player>_tv` | Switch | Turns the attached TV on and off over HDMI-CEC. **Only created for screens whose player reports CEC support** — see [TV power](#tv-power). |
 
 A screen named *Lobby Screen* gives you `select.lobby_screen_playlist`, and so on.
 
@@ -114,6 +115,25 @@ fails the entity will revert rather than lie to you.
 
 The screen picks the change up on its next check-in, usually within a minute. Larger
 playlists take longer, because the player downloads the content first.
+
+## TV power
+
+piSignage can switch the TV attached to a screen on and off over HDMI-CEC, exposed here
+as `switch.<player>_tv`. State comes from the player's own `tvStatus`, so the switch also
+follows the TV being switched off by piSignage's own schedule.
+
+The switch is **only created for players reporting `isCecSupported`**. piSignage accepts
+the command for any player and reports success regardless, so on a screen without working
+CEC the switch would silently do nothing. Support is read on every poll rather than fixed
+at startup, because a player probes its TV after booting and can report CEC a little
+later — the switch appears on its own when it does.
+
+> [!NOTE]
+> Switching the TV **off** works by putting the player on piSignage's special `TV_OFF`
+> playlist, not by stopping playback. Switching it back **on** restores power but leaves
+> the player on `TV_OFF`, so the screen comes back lit but without content. Select the
+> screen's playlist again to bring it back — that deploys, and the content returns once
+> the player has synced.
 
 ## Examples
 

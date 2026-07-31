@@ -47,6 +47,8 @@ def make_player(**overrides: Any) -> dict[str, Any]:
         "cpuSerialNumber": "400000000108d2e2",
         "licensed": True,
         "syncInProgress": False,
+        "tvStatus": True,
+        "isCecSupported": True,
     }
     player.update(overrides)
     return player
@@ -100,6 +102,7 @@ def mock_client():
         )
         client.async_assign_playlist = AsyncMock(return_value=[])
         client.async_get_group = AsyncMock(return_value=make_group())
+        client.async_set_tv_power = AsyncMock(return_value=None)
         yield client
 
 

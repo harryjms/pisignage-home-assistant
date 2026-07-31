@@ -503,3 +503,18 @@ async def test_assign_falls_back_to_the_cached_group() -> None:
     )
 
     assert session.calls[3][2]["json"]["deploy"] is True
+
+
+@pytest.mark.parametrize(
+    ("on", "expected_status"),
+    [(False, True), (True, False)],
+)
+async def test_set_tv_power_inverts_the_flag(on: bool, expected_status: bool) -> None:
+    """`status: true` means switch the TV OFF — easy to get backwards."""
+    session = FakeSession([login_ok(), ok()])
+    client = make_client(session)
+
+    await client.async_set_tv_power("player1", on)
+
+    assert session.paths[1] == "pitv/player1"
+    assert session.calls[1][2]["json"] == {"status": expected_status}

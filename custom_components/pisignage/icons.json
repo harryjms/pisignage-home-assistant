@@ -20,6 +20,14 @@
           "on": "mdi:monitor"
         }
       }
+    },
+    "switch": {
+      "tv": {
+        "default": "mdi:television-off",
+        "state": {
+          "on": "mdi:television"
+        }
+      }
     }
   }
 }

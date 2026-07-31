@@ -66,6 +66,11 @@
       "online": {
         "name": "Online"
       }
+    },
+    "switch": {
+      "tv": {
+        "name": "TV"
+      }
     }
   },
   "exceptions": {
@@ -74,6 +79,9 @@
     },
     "set_playlist_failed": {
       "message": "Could not switch to playlist {playlist}. {error}"
+    },
+    "set_tv_failed": {
+      "message": "Could not switch the TV {state}. {error}"
     }
   }
 }

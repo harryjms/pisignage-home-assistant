@@ -463,6 +463,20 @@ class PiSignageClient:
     # writes
     # ------------------------------------------------------------------
 
+    async def async_set_tv_power(self, player_id: str, on: bool) -> None:
+        """Switch the TV attached to *player_id* on or off over HDMI-CEC.
+
+        ``POST /pitv`` takes an **inverted** flag: ``status: true`` switches the
+        TV *off*. Only players reporting ``isCecSupported`` can be expected to
+        obey it — on the rest the server still reports the command as issued.
+
+        piSignage implements "off" by putting the player on the special
+        ``TV_OFF`` playlist rather than by cutting playback, so switching the TV
+        back on restores power but leaves the screen on that playlist until a
+        playlist is deployed to it again.
+        """
+        await self._request("POST", f"pitv/{quote(player_id)}", json={"status": not on})
+
     async def async_get_playlist(self, playlist: str) -> dict[str, Any]:
         """Fetch one playlist in full, including its asset rows and settings."""
         data = await self._request("GET", f"playlists/{quote(playlist, safe='')}")
