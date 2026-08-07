@@ -29,7 +29,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .api import PiSignageError
+from .api import PiSignageError, coerce_bool
 from .const import CONF_TV_MEDIA_PLAYERS, DOMAIN
 from .coordinator import PiSignageConfigEntry, PiSignageCoordinator
 from .entity import PiSignageEntity
@@ -63,7 +63,10 @@ async def async_setup_entry(
             player_id
             for player_id, player in coordinator.data.players.items()
             if player_id not in known
-            and (player.get("isCecSupported") is True or mapped.get(player_id))
+            and (
+                coerce_bool(player.get("isCecSupported")) is True
+                or mapped.get(player_id)
+            )
         ]
         if not new_ids:
             return
@@ -147,8 +150,7 @@ class PiSignageTvSwitch(PiSignageEntity, SwitchEntity):
         player = self.player
         if player is None:
             return None
-        status = player.get("tvStatus")
-        return status if isinstance(status, bool) else None
+        return coerce_bool(player.get("tvStatus"))
 
     @property
     def available(self) -> bool:

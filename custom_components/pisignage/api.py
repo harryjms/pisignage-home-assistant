@@ -118,6 +118,37 @@ def normalise_epoch(value: Any) -> float | None:
     return number
 
 
+#: String forms the API has been seen to use for a JSON boolean.
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off"})
+
+
+def coerce_bool(value: Any) -> bool | None:
+    """Return *value* as a bool, tolerating the API's loose typing.
+
+    piSignage is as inconsistent about booleans as it is about time: fields
+    such as ``tvStatus`` and ``isCecSupported`` come back as a real JSON
+    boolean on some builds and as the strings ``"true"``/``"false"`` (or ``1``/
+    ``0``) on others. Reading them with a bare ``isinstance(value, bool)`` check
+    left a CEC-capable screen's switch stuck in the unknown state, which Home
+    Assistant renders as a greyed-out, seemingly disabled toggle.
+
+    Returns ``None`` when the value is missing or cannot be understood, so the
+    caller can tell "off" apart from "no reading yet".
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in _TRUE_STRINGS:
+            return True
+        if text in _FALSE_STRINGS:
+            return False
+    return None
+
+
 def extract_list(data: Any) -> list[Any]:
     """Pull the list out of a response payload.
 

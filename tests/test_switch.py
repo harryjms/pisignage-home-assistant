@@ -36,6 +36,24 @@ async def test_switch_reports_tv_state(hass: HomeAssistant, init_integration) ->
     assert hass.states.get(TV_ENTITY).state == STATE_ON
 
 
+async def test_switch_reports_tv_state_from_string_booleans(
+    hass: HomeAssistant, mock_config_entry, mock_client
+) -> None:
+    """Some builds send tvStatus/isCecSupported as strings, not JSON booleans.
+
+    The switch must still appear and read on/off, rather than sitting in the
+    unknown state that Home Assistant paints as a disabled toggle.
+    """
+    mock_client.async_get_players.return_value = [
+        make_player(isCecSupported="true", tvStatus="false")
+    ]
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(TV_ENTITY).state == STATE_OFF
+
+
 async def test_no_switch_without_cec_support(
     hass: HomeAssistant, mock_config_entry, mock_client
 ) -> None:

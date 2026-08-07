@@ -17,6 +17,7 @@ from custom_components.pisignage.api import (
     PiSignageClient,
     PiSignageError,
     build_base_url,
+    coerce_bool,
     normalise_epoch,
 )
 
@@ -118,6 +119,30 @@ def test_build_base_url_rejects_empty() -> None:
 )
 def test_normalise_epoch(value: Any, expected: Any) -> None:
     assert normalise_epoch(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        (False, False),
+        # The hosted API has been seen to send these fields as strings.
+        ("true", True),
+        ("false", False),
+        ("True", True),
+        ("  FALSE  ", False),
+        ("on", True),
+        ("off", False),
+        (1, True),
+        (0, False),
+        # Missing or unintelligible readings stay unknown, not "off".
+        (None, None),
+        ("nonsense", None),
+        ("", None),
+    ],
+)
+def test_coerce_bool(value: Any, expected: Any) -> None:
+    assert coerce_bool(value) is expected
 
 
 async def test_login_caches_token() -> None:
